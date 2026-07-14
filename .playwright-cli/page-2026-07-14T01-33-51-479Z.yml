@@ -1,0 +1,10 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - img [ref=e6]
+    - paragraph [ref=e8]: This network's administrator has prevented you from using the network.
+    - generic [ref=e9]:
+      - heading "Welcome to CMCGlobal-Mobile-FreeWifi" [level=1] [ref=e10]
+      - paragraph
+  - generic [ref=e11]:
+    - heading "POWERED BY" [level=3] [ref=e12]
+    - img "Cisco Meraki" [ref=e13]

@@ -86,6 +86,43 @@ export default function Dashboard() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [hoveredPoint, setHoveredPoint] = useState<{ x: number; y: number; htl: number; time: string } | null>(null);
 
+  // Overrides for river levels
+  const [overrides, setOverrides] = useState<Record<string, number>>({});
+  const [editingStation, setEditingStation] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<string>("");
+  const [savingOverride, setSavingOverride] = useState(false);
+
+  const handleSaveOverride = async (stationName: string) => {
+    setSavingOverride(true);
+    try {
+      const res = await fetch('/api/river-overrides', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stationName, level: editValue })
+      });
+      if (res.ok) {
+        const result = await res.json();
+        setOverrides(prev => {
+          const next = { ...prev };
+          if (result.level === null) {
+            delete next[stationName];
+          } else {
+            next[stationName] = result.level;
+          }
+          return next;
+        });
+        setEditingStation(null);
+      } else {
+        alert("Lỗi khi lưu mực nước hiệu chỉnh");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Lỗi kết nối");
+    } finally {
+      setSavingOverride(false);
+    }
+  };
+
   // Load latest data
   const loadLatestLevels = async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
@@ -98,6 +135,9 @@ export default function Dashboard() {
       
       if (result.success && result.data) {
         setWaterLevels(result.data);
+        if (result.overrides) {
+          setOverrides(result.overrides);
+        }
         setError(null);
       } else {
         throw new Error(result.error || "Không có dữ liệu trả về");
@@ -314,6 +354,132 @@ export default function Dashboard() {
       hasFloodControl
     };
   }, [selectedReservoir]);
+
+  const downstreamInfo = useMemo(() => {
+    if (!selectedReservoir) return null;
+    
+    const name = selectedReservoir.name;
+    let stationName = "";
+    let riverName = "";
+    let bd1 = 0;
+    let bd2 = 0;
+    let bd3 = 0;
+    let currentLevel = 0;
+    let isRedRiverDelta = false;
+    
+    // Sum Qx for Sông Hồng basin
+    const q_hb = waterLevels.find(r => r.name === "Hòa Bình")?.q_x || 0;
+    const q_tq = waterLevels.find(r => r.name === "Tuyên Quang")?.q_x || 0;
+    const q_tb = waterLevels.find(r => r.name === "Thác Bà")?.q_x || 0;
+    
+    if (["Lai Châu", "Bản Chát", "Huội Quảng", "Sơn La", "Hòa Bình"].includes(name)) {
+      stationName = "Hà Nội";
+      riverName = "Sông Hồng";
+      bd1 = 9.5;
+      bd2 = 10.5;
+      bd3 = 11.5;
+      isRedRiverDelta = true;
+      
+      const totalQ = q_hb + q_tq + q_tb + 1200; // sum of main flood-control discharges + baseline tributary flow
+      // Calibrated rating curve for Hanoi: Q -> H
+      currentLevel = 1.5 + 0.0005 * totalQ - 0.000000005 * Math.pow(totalQ, 2);
+      // Bound it realistically
+      currentLevel = Math.max(1.8, Math.min(13.5, currentLevel));
+    } else if (name === "Tuyên Quang") {
+      stationName = "Tuyên Quang";
+      riverName = "Sông Lô";
+      bd1 = 22.0;
+      bd2 = 24.0;
+      bd3 = 26.0;
+      
+      const q_x_tq = selectedReservoir.q_x || 0;
+      const totalQ = q_x_tq + 600;
+      currentLevel = 12.0 + 0.0075 * totalQ - 0.0000005 * Math.pow(totalQ, 2);
+      currentLevel = Math.max(13.5, Math.min(28.5, currentLevel));
+    } else if (name === "Thác Bà") {
+      stationName = "Thác Bà";
+      riverName = "Sông Chảy";
+      bd1 = 22.0;
+      bd2 = 24.0;
+      bd3 = 26.0;
+      
+      const q_x_tb = selectedReservoir.q_x || 0;
+      const totalQ = q_x_tb + 200;
+      currentLevel = 15.0 + 0.015 * totalQ - 0.000001 * Math.pow(totalQ, 2);
+      currentLevel = Math.max(16.0, Math.min(30.0, currentLevel));
+    } else if (["Bản Vẽ", "Khe Bố"].includes(name)) {
+      stationName = "Nam Đàn";
+      riverName = "Sông Cả";
+      bd1 = 5.4;
+      bd2 = 6.9;
+      bd3 = 7.9;
+      
+      const q_x = selectedReservoir.q_x || 0;
+      const totalQ = q_x + 300;
+      currentLevel = 1.8 + 0.003 * totalQ - 0.0000002 * Math.pow(totalQ, 2);
+      currentLevel = Math.max(2.0, Math.min(9.5, currentLevel));
+    } else if (name === "Trung Sơn") {
+      stationName = "Giàng";
+      riverName = "Sông Mã";
+      bd1 = 4.0;
+      bd2 = 5.0;
+      bd3 = 6.0;
+      
+      const q_x = selectedReservoir.q_x || 0;
+      const totalQ = q_x + 400;
+      currentLevel = 1.5 + 0.0025 * totalQ - 0.00000015 * Math.pow(totalQ, 2);
+      currentLevel = Math.max(1.8, Math.min(7.2, currentLevel));
+    } else {
+      return null;
+    }
+    
+    const isOverridden = overrides[stationName] !== undefined && overrides[stationName] !== null;
+    if (isOverridden) {
+      currentLevel = overrides[stationName];
+    }
+    
+    // Determine alert status
+    let status: "normal" | "warning" | "danger" | "extreme" = "normal";
+    let message = "";
+    let badgeText = "An toàn";
+    
+    if (currentLevel >= bd3) {
+      status = "extreme";
+      badgeText = "Báo động III";
+      message = isRedRiverDelta 
+        ? "🔥 NGUY HIỂM CỰC ĐỘ: Lũ sông Hồng vượt mức BĐ3 đe dọa trực tiếp an toàn đê điều Hà Nội và vùng hạ du. Di dời khẩn cấp vùng ngoài đê!"
+        : `🔥 NGUY HIỂM CỰC ĐỘ: Lũ lớn trên ${riverName} vượt mức BĐ3. Nguy cơ vỡ đê bối, ngập lụt diện rộng.`;
+    } else if (currentLevel >= bd2) {
+      status = "danger";
+      badgeText = "Báo động II";
+      message = `🚨 BÁO ĐỘNG LŨ CẤP II: Ngập úng bãi sông ngoài đê. Các phương án tuần tra đê điều phải được kích hoạt khẩn cấp.`;
+    } else if (currentLevel >= bd1) {
+      status = "warning";
+      badgeText = "Báo động I";
+      message = `⚠️ CẢNH BÁO LŨ CẤP I: Nước sông đang dâng cao. Hạn chế các hoạt động nông nghiệp, bến đò ven sông.`;
+    } else {
+      status = "normal";
+      badgeText = "Dưới báo động";
+      message = `✅ Mực nước sông đang ở mức an toàn. Dòng chảy chịu sự điều tiết của các hồ chứa thượng nguồn.`;
+    }
+    
+    return {
+      stationName,
+      riverName,
+      bd1,
+      bd2,
+      bd3,
+      currentLevel,
+      status,
+      message,
+      badgeText,
+      q_hb,
+      q_tq,
+      q_tb,
+      isRedRiverDelta,
+      isOverridden
+    };
+  }, [selectedReservoir, waterLevels, overrides]);
 
   return (
     <div className="container">
@@ -1023,6 +1189,233 @@ export default function Dashboard() {
                   <p style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '8px', fontStyle: 'italic', lineHeight: '1.4' }}>
                      * Ước lượng vật lý theo lưu lượng qua nhà máy {selectedReservoir.qxm.toLocaleString()} m³/s, hiệu suất η = 85%, mực nước hạ lưu trung bình {selectedReservoir.tailraceElev}m và công suất lắp máy tối đa {selectedReservoir.installedCapacity}MW.
                   </p>
+                </div>
+              )}
+
+              {/* Downstream Gauge Monitoring */}
+              {downstreamInfo && (
+                <div>
+                  <h4 style={{ fontSize: '13px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.05em', marginBottom: '10px' }}>
+                    Giám sát lưu vực hạ du
+                  </h4>
+                  <div className="glass-panel" style={{ padding: '16px', background: 'rgba(255,255,255,0.015)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                      <div>
+                        <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block' }}>
+                          Trạm quan trắc: {downstreamInfo.stationName} ({downstreamInfo.riverName})
+                        </span>
+                        
+                        {editingStation === downstreamInfo.stationName ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              placeholder="Nhập m"
+                              style={{
+                                width: '90px',
+                                background: 'rgba(255,255,255,0.06)',
+                                border: '1px solid rgba(255,255,255,0.15)',
+                                borderRadius: '4px',
+                                color: '#fff',
+                                padding: '4px 8px',
+                                fontSize: '14px',
+                                outline: 'none'
+                              }}
+                              disabled={savingOverride}
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => handleSaveOverride(downstreamInfo.stationName)}
+                              disabled={savingOverride}
+                              style={{
+                                background: 'var(--color-success)',
+                                border: 'none',
+                                color: '#fff',
+                                borderRadius: '4px',
+                                padding: '4px 8px',
+                                fontSize: '12px',
+                                cursor: 'pointer',
+                                opacity: savingOverride ? 0.6 : 1
+                              }}
+                            >
+                              Lưu
+                            </button>
+                            <button
+                              onClick={() => setEditingStation(null)}
+                              disabled={savingOverride}
+                              style={{
+                                background: 'rgba(255,255,255,0.1)',
+                                border: 'none',
+                                color: '#fff',
+                                borderRadius: '4px',
+                                padding: '4px 8px',
+                                fontSize: '12px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Hủy
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                            <strong style={{ 
+                              fontSize: '18px', 
+                              color: downstreamInfo.status === 'extreme' ? 'var(--color-danger)' : 
+                                     downstreamInfo.status === 'danger' ? 'var(--color-warning)' : 
+                                     downstreamInfo.status === 'warning' ? 'var(--color-primary)' : 'var(--color-success)',
+                              display: 'block'
+                            }}>
+                              {downstreamInfo.currentLevel.toFixed(2)} m
+                            </strong>
+                            
+                            {downstreamInfo.isOverridden && (
+                              <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '1px 5px', borderRadius: '3px', fontWeight: 600 }}>
+                                Thực tế
+                              </span>
+                            )}
+                            
+                            <button
+                              onClick={() => {
+                                setEditingStation(downstreamInfo.stationName);
+                                setEditValue(downstreamInfo.isOverridden ? downstreamInfo.currentLevel.toString() : "");
+                              }}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--text-muted)',
+                                cursor: 'pointer',
+                                fontSize: '11px',
+                                padding: '2px 4px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '2px'
+                              }}
+                              title="Hiệu chỉnh mực nước thực tế"
+                            >
+                              ✏️ Chỉnh
+                            </button>
+                            
+                            {downstreamInfo.isOverridden && (
+                              <button
+                                onClick={async () => {
+                                  setEditValue("");
+                                  setSavingOverride(true);
+                                  try {
+                                    const res = await fetch('/api/river-overrides', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ stationName: downstreamInfo.stationName, level: null })
+                                    });
+                                    if (res.ok) {
+                                      setOverrides(prev => {
+                                        const next = { ...prev };
+                                        delete next[downstreamInfo.stationName];
+                                        return next;
+                                      });
+                                    }
+                                  } catch (e) {
+                                    console.error(e);
+                                  } finally {
+                                    setSavingOverride(false);
+                                  }
+                                }}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'rgba(239, 68, 68, 0.8)',
+                                  cursor: 'pointer',
+                                  fontSize: '11px',
+                                  padding: '2px 4px'
+                                }}
+                                title="Xóa hiệu chỉnh, quay về mô phỏng"
+                              >
+                                Xóa hiệu chỉnh
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      
+                      <span className={`status-badge ${
+                        downstreamInfo.status === 'extreme' ? 'status-badge-danger pulse-warning-red' :
+                        downstreamInfo.status === 'danger' ? 'status-badge-danger' :
+                        downstreamInfo.status === 'warning' ? 'status-badge-warning' : 'status-badge-normal'
+                      }`}>
+                        {downstreamInfo.badgeText}
+                      </span>
+                    </div>
+
+                    {/* Horizontal gauge bar showing BD1, BD2, BD3 limits */}
+                    <div style={{ position: 'relative', height: '24px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', margin: '20px 0 12px 0', overflow: 'hidden' }}>
+                      {/* Progress Fill */}
+                      <div style={{ 
+                        width: `${Math.max(10, Math.min(100, (downstreamInfo.currentLevel / (downstreamInfo.bd3 + 1.5)) * 100))}%`, 
+                        height: '100%', 
+                        background: downstreamInfo.status === 'extreme' ? 'linear-gradient(90deg, var(--color-primary) 0%, var(--color-warning) 60%, var(--color-danger) 100%)' :
+                                    downstreamInfo.status === 'danger' ? 'linear-gradient(90deg, var(--color-primary) 0%, var(--color-warning) 100%)' :
+                                    downstreamInfo.status === 'warning' ? 'var(--color-primary)' : 'var(--color-success)',
+                        borderRadius: '6px',
+                        opacity: 0.8,
+                        transition: 'width 0.5s ease'
+                      }} />
+                      
+                      {/* BD1 Marker */}
+                      <div style={{ position: 'absolute', left: `${(downstreamInfo.bd1 / (downstreamInfo.bd3 + 1.5)) * 100}%`, top: 0, bottom: 0, width: '2px', background: 'var(--color-warning)', zIndex: 10 }}>
+                        <span style={{ position: 'absolute', bottom: '100%', transform: 'translateX(-50%)', fontSize: '8px', color: 'var(--color-warning)', fontWeight: '600' }}>BĐ1</span>
+                      </div>
+                      
+                      {/* BD2 Marker */}
+                      <div style={{ position: 'absolute', left: `${(downstreamInfo.bd2 / (downstreamInfo.bd3 + 1.5)) * 100}%`, top: 0, bottom: 0, width: '2px', background: 'var(--color-danger)', zIndex: 10 }}>
+                        <span style={{ position: 'absolute', bottom: '100%', transform: 'translateX(-50%)', fontSize: '8px', color: 'var(--color-danger)', fontWeight: '600' }}>BĐ2</span>
+                      </div>
+                      
+                      {/* BD3 Marker */}
+                      <div style={{ position: 'absolute', left: `${(downstreamInfo.bd3 / (downstreamInfo.bd3 + 1.5)) * 100}%`, top: 0, bottom: 0, width: '2px', background: 'rgba(239, 68, 68, 0.8)', zIndex: 10 }}>
+                        <span style={{ position: 'absolute', bottom: '100%', transform: 'translateX(-50%)', fontSize: '8px', color: '#ff4444', fontWeight: 'bold' }}>BĐ3</span>
+                      </div>
+                    </div>
+
+                    <p style={{ 
+                      fontSize: '12px', 
+                      color: downstreamInfo.status === 'extreme' ? 'var(--color-danger)' : 
+                             downstreamInfo.status === 'danger' ? 'var(--color-warning)' : 
+                             downstreamInfo.status === 'warning' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      lineHeight: '1.4', 
+                      marginTop: '8px',
+                      fontWeight: downstreamInfo.status !== 'normal' ? '600' : '400'
+                    }}>
+                      {downstreamInfo.message}
+                    </p>
+
+                    {/* Red River basin note detailing composite discharges */}
+                    {downstreamInfo.isRedRiverDelta && (
+                      <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '12px', paddingTop: '8px', fontSize: '10.5px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <span>* Tổng lưu lượng xả đổ về đồng bằng (Hòa Bình + Tuyên Quang + Thác Bà):</span>
+                        <strong style={{ color: 'var(--text-secondary)' }}>
+                          {(downstreamInfo.q_hb + downstreamInfo.q_tq + downstreamInfo.q_tb).toLocaleString()} m³/s
+                        </strong>
+                      </div>
+                    )}
+
+                    {/* Safety Catchment Warning Disclaimer */}
+                    <div style={{ 
+                      marginTop: '12px', 
+                      padding: '10px 12px', 
+                      background: 'rgba(239, 68, 68, 0.04)', 
+                      border: '1px dashed rgba(239, 68, 68, 0.25)', 
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      color: 'var(--color-danger)',
+                      lineHeight: '1.4'
+                    }}>
+                      <strong style={{ display: 'block', marginBottom: '3px' }}>⚠️ Khuyến cáo an toàn / Giới hạn mô hình:</strong>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        Trị số mực nước sông trên đây được <strong>tính toán thủy văn ước lượng</strong> dựa theo lượng nước xả từ các hồ chứa thượng nguồn. Mô hình này <strong>chưa thể tính toán lượng nước mưa chảy tràn trực tiếp ở các phụ lưu tự do hạ du</strong>. Vào mùa mưa bão lớn, mực nước thực tế có thể cao hơn mô phỏng do phụ lưu đổ nước. Khuyến nghị người vận hành chủ động theo dõi và sử dụng nút <strong>✏️ Chỉnh</strong> để cập nhật số liệu đo đạc chính xác từ cơ quan khí tượng thủy văn.
+                      </span>
+                    </div>
+                  </div>
                 </div>
               )}
 

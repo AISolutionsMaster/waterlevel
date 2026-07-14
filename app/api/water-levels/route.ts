@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDb, initDatabaseSchema } from '../../../utils/db';
+import { getDb, initDatabaseSchema, getRiverOverrides } from '../../../utils/db';
 import { fetchWaterLevels } from '../../../utils/scraper';
 import { reservoirsMetadata, getActiveSeasonAndTransition, estimateHydroPower } from '../../../data/reservoirs';
 
@@ -222,9 +222,12 @@ export async function GET(request: Request) {
     }
   }
 
+  const overrides = await getRiverOverrides();
+
   return NextResponse.json({
     success: true,
     isFromDb,
-    data: enrichedData
+    data: enrichedData,
+    overrides
   });
 }
