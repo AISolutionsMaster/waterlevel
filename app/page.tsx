@@ -1318,7 +1318,8 @@ export default function Dashboard() {
               <span>Đang tải lịch sử các hồ bậc thang...</span>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0px', width: '100%' }}>
+            <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '12px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0px', width: '960px', margin: '0 auto' }}>
               {CASCADES[selectedCascade].reservoirs.map((name, index) => {
                 const item = waterLevels.find(w => w.name === name);
                 if (!item) return null;
@@ -1648,6 +1649,7 @@ export default function Dashboard() {
                   </React.Fragment>
                 );
               })}
+              </div>
             </div>
           )}
         </div>
