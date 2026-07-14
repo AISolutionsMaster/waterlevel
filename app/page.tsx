@@ -1655,6 +1655,38 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* 5.5 Footer Disclaimer */}
+      <footer style={{ 
+        marginTop: '40px', 
+        paddingTop: '24px', 
+        borderTop: '1px solid var(--border-color)', 
+        color: 'var(--text-muted)', 
+        fontSize: '12px',
+        lineHeight: '1.6',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        marginBottom: '20px'
+      }}>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+          <strong style={{ color: 'var(--color-warning)' }}>⚠️ Tuyên bố miễn trừ trách nhiệm (Disclaimer):</strong>
+        </div>
+        <ul style={{ paddingLeft: '18px', margin: 0, display: 'flex', flexDirection: 'column', gap: '6px', listStyleType: 'disc' }}>
+          <li>
+            <strong>Tính chất dự án:</strong> Đây là dự án hobby phi thương mại phục vụ nhu cầu tra cứu và nghiên cứu cá nhân. Thông tin trên trang này không được sử dụng cho mục đích dự báo khí tượng thủy văn, điều hành phòng chống thiên tai chuyên nghiệp hoặc ra các quyết định thực tế.
+          </li>
+          <li>
+            <strong>Nguồn dữ liệu hồ chứa:</strong> Dữ liệu vận hành hồ chứa (mực nước hồ, lưu lượng xả, nước về) được tự động thu thập (crawl) từ trang thông tin vận hành của Tập đoàn Điện lực Việt Nam (EVN): <a href="https://www.evn.com.vn/c3/thong-tin-ho-thuy-dien/Muc-nuoc-cac-ho-thuy-dien-117-123.aspx" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'none', fontWeight: '500' }} onMouseOver={(e) => e.currentTarget.style.textDecoration = 'underline'} onMouseOut={(e) => e.currentTarget.style.textDecoration = 'none'}>evn.com.vn</a>.
+          </li>
+          <li>
+            <strong>Dữ liệu mực nước các sông:</strong> Dự án hiện tại <strong>không có dữ liệu đo đạc thực tế</strong> của mực nước tại các con sông (như trạm Hà Nội trên sông Hồng, trạm Tuyên Quang trên sông Lô...). Các trị số mực nước sông hạ lưu hiển thị trên hệ thống là kết quả tính toán mô phỏng/giả lập dựa trên lưu lượng xả lũ để phục vụ học tập thuật toán điều tiết liên hồ chứa.
+          </li>
+        </ul>
+        <div style={{ marginTop: '12px', fontSize: '11px', textAlign: 'center', opacity: 0.6 }}>
+          © {new Date().getFullYear()} Giám sát Hồ Chứa Việt Nam • Dự án tham khảo cá nhân
+        </div>
+      </footer>
+
       {/* 6. Detailed Side Panel (Drawer) Backdrop & Element */}
       <div 
         className={`drawer-backdrop ${selectedReservoir ? 'open' : ''}`} 
