@@ -3,6 +3,9 @@ import { getDb, initDatabaseSchema } from '../../../utils/db';
 import { fetchWaterLevels } from '../../../utils/scraper';
 import { reservoirsMetadata, getActiveSeasonAndTransition, estimateHydroPower } from '../../../data/reservoirs';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(request: Request) {
   await initDatabaseSchema();
   const sql = getDb();
@@ -211,6 +214,7 @@ export async function GET(request: Request) {
       
       // Dispatch background promise
       fetch(cronUrl, {
+        cache: 'no-store',
         headers: process.env.CRON_SECRET ? { 'Authorization': `Bearer ${process.env.CRON_SECRET}` } : {}
       }).catch(err => console.error("Stale background scrape trigger warning:", err));
     } catch (e) {

@@ -92,7 +92,7 @@ export default function Dashboard() {
     else setLoading(true);
     
     try {
-      const res = await fetch('/api/water-levels');
+      const res = await fetch(`/api/water-levels?t=${Date.now()}`);
       if (!res.ok) throw new Error("Không thể kết nối API dữ liệu");
       const result = await res.json();
       
@@ -119,7 +119,7 @@ export default function Dashboard() {
   const fetchReservoirHistory = async (reservoirName: string, currentHtl: number) => {
     setHistoryLoading(true);
     try {
-      const res = await fetch(`/api/history?reservoir=${encodeURIComponent(reservoirName)}&current=${currentHtl}`);
+      const res = await fetch(`/api/history?reservoir=${encodeURIComponent(reservoirName)}&current=${currentHtl}&t=${Date.now()}`);
       if (!res.ok) throw new Error("Không thể kết nối API lịch sử");
       const result = await res.json();
       if (result.success && result.data) {
