@@ -1366,19 +1366,19 @@ export default function Dashboard() {
                       onMouseOver={(e) => e.currentTarget.style.borderColor = 'rgba(14, 165, 233, 0.4)'}
                       onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border-color)'}
                     >
+                      {/* Sticky Top Header Capsule */}
+                      <div className="cascade-card-title-sticky">
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: '6px' }}>
+                          Bậc {index + 1} • {item.riverBasin}
+                        </span>
+                        <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>{item.name}</strong>
+                        <span className={`status-badge ${statusClass}`} style={{ fontSize: '10px', padding: '2px 8px' }}>
+                          {statusText}
+                        </span>
+                      </div>
+
                       {/* Left: Metadata and vertical gauge */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div>
-                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                              Bậc {index + 1} • {item.riverBasin}
-                            </span>
-                            <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--text-primary)', marginTop: '2px' }}>{item.name}</h3>
-                          </div>
-                          <span className={`status-badge ${statusClass}`} style={{ fontSize: '11px' }}>
-                            {statusText}
-                          </span>
-                        </div>
+                      <div className="cascade-card-left">
 
                         <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
                           {/* Visual vertical gauge */}

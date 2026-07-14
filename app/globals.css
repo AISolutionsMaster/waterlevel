@@ -565,10 +565,33 @@ button, input, select {
   border: 1px solid var(--border-color);
   display: grid;
   grid-template-columns: 260px 1fr;
-  gap: 24px;
+  grid-template-rows: auto 1fr;
+  gap: 16px 24px;
   position: relative;
   transition: all 0.3s ease;
   cursor: pointer;
+}
+
+.cascade-card-title-sticky {
+  grid-column: 1 / span 2;
+  position: sticky;
+  left: 20px;
+  z-index: 10;
+  background: #11182b; /* match --bg-surface-solid */
+  border: 1px solid var(--border-color);
+  padding: 6px 14px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  box-shadow: var(--shadow-md);
+}
+
+.cascade-card-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .cascade-charts-grid {
