@@ -1360,20 +1360,7 @@ export default function Dashboard() {
                   <React.Fragment key={name}>
                     {/* Reservoir Cascade Row Card */}
                     <div 
-                      className="glass-panel" 
-                      style={{ 
-                        width: '100%', 
-                        maxWidth: '960px', 
-                        padding: '20px', 
-                        borderRadius: '16px',
-                        border: '1px solid var(--border-color)',
-                        display: 'grid',
-                        gridTemplateColumns: '260px 1fr',
-                        gap: '24px',
-                        position: 'relative',
-                        transition: 'all 0.3s ease',
-                        cursor: 'pointer'
-                      }}
+                      className="glass-panel cascade-card" 
                       onClick={() => handleSelectReservoir(item)}
                       onMouseOver={(e) => e.currentTarget.style.borderColor = 'rgba(14, 165, 233, 0.4)'}
                       onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border-color)'}
@@ -1453,7 +1440,7 @@ export default function Dashboard() {
                       </div>
 
                       {/* Right: Twin trend mini-charts side-by-side */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                      <div className="cascade-charts-grid">
                         {/* Mini-Chart 1: Water Level */}
                         <div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>

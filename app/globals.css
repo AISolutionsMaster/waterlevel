@@ -556,3 +556,37 @@ button, input, select {
 .flash-red {
   animation: flash-bg-red 1.5s infinite;
 }
+
+/* Cascade View Responsive Cards */
+.cascade-card {
+  width: 100%;
+  max-width: 960px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 24px;
+  position: relative;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.cascade-charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .cascade-card {
+    grid-template-columns: 1fr !important;
+    padding: 16px !important;
+    gap: 16px !important;
+  }
+  
+  .cascade-charts-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+}
