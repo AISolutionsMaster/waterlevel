@@ -10,10 +10,20 @@ export async function GET(request: Request) {
   const name = searchParams.get('reservoir');
   const currentValStr = searchParams.get('current');
   const currentVal = currentValStr ? parseFloat(currentValStr) : null;
+  const range = searchParams.get('range') || '3d';
 
   if (!name) {
     return NextResponse.json({ error: 'Reservoir name is required' }, { status: 400 });
   }
+
+  // Calculate threshold date based on range
+  let days = 3;
+  if (range === '7d') days = 7;
+  else if (range === '15d') days = 15;
+  else if (range === '30d') days = 30;
+  else if (range === '1y') days = 365;
+
+  const thresholdDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   await initDatabaseSchema();
   const sql = getDb();
@@ -34,7 +44,7 @@ export async function GET(request: Request) {
           qxm
         FROM water_level_history
         WHERE reservoir_name = ${name}
-          AND timestamp >= NOW() - INTERVAL '72 hours'
+          AND timestamp >= ${thresholdDate.toISOString()}
         ORDER BY timestamp ASC
       `;
       isFromDb = history.length > 0;
@@ -48,11 +58,11 @@ export async function GET(request: Request) {
     try {
       const { readLocalJsonDb } = require('../../../utils/db');
       const localData = readLocalJsonDb();
-      const seventyTwoHoursAgo = Date.now() - 72 * 60 * 60 * 1000;
+      const thresholdTime = thresholdDate.getTime();
       
       const filtered = localData.filter((r: any) => 
         r.reservoir_name === name && 
-        new Date(r.timestamp).getTime() >= seventyTwoHoursAgo
+        new Date(r.timestamp).getTime() >= thresholdTime
       );
 
       if (filtered.length > 0) {
