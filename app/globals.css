@@ -195,12 +195,22 @@ button, input, select {
   100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
 }
 
+@keyframes pulse-blue {
+  0% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(14, 165, 233, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0); }
+}
+
 .pulse-warning-red {
   animation: pulse-red 2s infinite;
 }
 
 .pulse-warning-amber {
   animation: pulse-amber 2s infinite;
+}
+
+.pulse-warning-blue {
+  animation: pulse-blue 2s infinite;
 }
 
 /* Marquee / Banners */

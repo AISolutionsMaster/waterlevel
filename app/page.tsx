@@ -78,7 +78,7 @@ export default function Dashboard() {
   const [selectedRegion, setSelectedRegion] = useState("All");
   const [selectedBasin, setSelectedBasin] = useState("All");
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
-  const [specialFilter, setSpecialFilter] = useState<"none" | "discharge" | "warning">("none");
+  const [specialFilter, setSpecialFilter] = useState<"none" | "discharge" | "warning" | "low_level">("none");
 
   // Selected Reservoir Detail Drawer
   const [selectedReservoir, setSelectedReservoir] = useState<ReservoirData | null>(null);
@@ -236,6 +236,10 @@ export default function Dashboard() {
     const baseMatched = baseList.filter(r => {
       if (specialFilter === "discharge") return r.qxt > 0;
       if (specialFilter === "warning") return r.status === "danger" || r.status === "warning";
+      if (specialFilter === "low_level") {
+        const isPondage = (r.hdbt - r.hc) < 3.0;
+        return isPondage ? (r.htl <= r.hc + 0.05) : (r.htl <= (r.hc + 0.15 * (r.hdbt - r.hc)));
+      }
       return true;
     });
 
@@ -244,7 +248,14 @@ export default function Dashboard() {
 
     // 4. Return union: base matches + all other "Sông Đà" reservoirs in the filtered set
     return baseList.filter(r => {
-      const isBaseMatch = specialFilter === "discharge" ? (r.qxt > 0) : (r.status === "danger" || r.status === "warning");
+      let isBaseMatch = false;
+      if (specialFilter === "discharge") isBaseMatch = r.qxt > 0;
+      else if (specialFilter === "warning") isBaseMatch = r.status === "danger" || r.status === "warning";
+      else if (specialFilter === "low_level") {
+        const isPondage = (r.hdbt - r.hc) < 3.0;
+        isBaseMatch = isPondage ? (r.htl <= r.hc + 0.05) : (r.htl <= (r.hc + 0.15 * (r.hdbt - r.hc)));
+      }
+
       if (isBaseMatch) return true;
       if (hasSongDaMatch && r.riverBasin === "Sông Đà") return true;
       return false;
@@ -257,19 +268,25 @@ export default function Dashboard() {
     let totalOutflow = 0;
     let dischargeCount = 0;
     let alertCount = 0;
+    let lowLevelCount = 0;
 
     waterLevels.forEach(r => {
       totalInflow += r.qve;
       totalOutflow += r.q_x;
       if (r.qxt > 0) dischargeCount++;
       if (r.status === "danger" || r.status === "warning") alertCount++;
+      
+      const isPondage = (r.hdbt - r.hc) < 3.0;
+      const isLow = isPondage ? (r.htl <= r.hc + 0.05) : (r.htl <= (r.hc + 0.15 * (r.hdbt - r.hc)));
+      if (isLow) lowLevelCount++;
     });
 
     return {
       totalInflow: Math.round(totalInflow),
       totalOutflow: Math.round(totalOutflow),
       dischargeCount,
-      alertCount
+      alertCount,
+      lowLevelCount
     };
   }, [waterLevels]);
 
@@ -280,7 +297,7 @@ export default function Dashboard() {
 
   // Custom SVG Line Chart coordinates calculations
   const chartProps = useMemo(() => {
-    if (history.length === 0) return null;
+    if (history.length === 0 || !selectedReservoir) return null;
 
     const width = 420;
     const height = 180;
@@ -292,11 +309,16 @@ export default function Dashboard() {
     const htls = history.map(h => h.htl);
     const minH = Math.min(...htls);
     const maxH = Math.max(...htls);
-    const hRange = (maxH - minH) || 2;
+    let hRange = maxH - minH;
     
-    // Add 10% breathing room to chart limits
-    const yMin = minH - hRange * 0.1;
-    const yMax = maxH + hRange * 0.1;
+    // Ensure chart has a minimum vertical scale range of 0.5 meters to prevent micro-fluctuations (noise) from looking like flood waves
+    if (hRange < 0.5) {
+      hRange = 0.5;
+    }
+    
+    const avg = (minH + maxH) / 2;
+    const yMin = avg - hRange * 0.55;
+    const yMax = avg + hRange * 0.55;
     const yRange = yMax - yMin;
 
     const points = history.map((pt, idx) => {
@@ -311,6 +333,13 @@ export default function Dashboard() {
     // SVG area shade path string
     const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - paddingBottom} L ${points[0].x} ${height - paddingBottom} Z`;
 
+    // Calculate position for the hControl line if it fits on screen
+    const hControl = selectedReservoir.hControl;
+    let hControlY = null;
+    if (hControl >= yMin && hControl <= yMax) {
+      hControlY = height - paddingBottom - ((hControl - yMin) / yRange) * (height - paddingTop - paddingBottom);
+    }
+
     return {
       width,
       height,
@@ -321,10 +350,11 @@ export default function Dashboard() {
       points,
       linePath,
       areaPath,
-      yMin: yMin.toFixed(1),
-      yMax: yMax.toFixed(1),
+      yMin: yMin.toFixed(2),
+      yMax: yMax.toFixed(2),
+      hControlY
     };
-  }, [history]);
+  }, [history, selectedReservoir]);
 
   // Estimate current reservoir storage volume and available flood control slice
   const capacityInfo = useMemo(() => {
@@ -580,6 +610,33 @@ export default function Dashboard() {
             {aggregates.alertCount} <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>hồ cần lưu ý</span>
           </div>
         </div>
+
+        <div 
+          className={`glass-panel ${aggregates.lowLevelCount > 0 && specialFilter !== 'low_level' ? 'pulse-warning-blue' : ''}`} 
+          style={{ 
+            padding: '20px', 
+            cursor: 'pointer', 
+            userSelect: 'none',
+            borderTop: specialFilter === 'low_level' ? '1px solid var(--color-primary)' : '1px solid transparent',
+            borderRight: specialFilter === 'low_level' ? '1px solid var(--color-primary)' : '1px solid transparent',
+            borderBottom: specialFilter === 'low_level' ? '1px solid var(--color-primary)' : '1px solid transparent',
+            borderLeft: specialFilter === 'low_level' 
+              ? '1px solid var(--color-primary)' 
+              : (aggregates.lowLevelCount > 0 ? '4px solid var(--color-primary)' : '1px solid transparent'),
+            boxShadow: specialFilter === 'low_level' ? '0 0 15px rgba(14, 165, 233, 0.25)' : undefined,
+            background: specialFilter === 'low_level' ? 'rgba(14, 165, 233, 0.03)' : undefined,
+            transition: 'all 0.3s ease'
+          }}
+          onClick={() => setSpecialFilter(specialFilter === 'low_level' ? 'none' : 'low_level')}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '8px' }}>
+            Hồ có mực nước thấp
+            <Droplet style={{ color: aggregates.lowLevelCount > 0 ? 'var(--color-primary)' : 'var(--text-muted)', width: '18px', height: '18px' }} />
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: '700', color: aggregates.lowLevelCount > 0 ? 'var(--color-primary)' : 'var(--text-primary)' }}>
+            {aggregates.lowLevelCount} <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>hồ cận MNC</span>
+          </div>
+        </div>
       </section>
 
       {/* 4. Filters Bar */}
@@ -644,7 +701,7 @@ export default function Dashboard() {
       {specialFilter !== "none" && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '24px', background: 'rgba(255, 255, 255, 0.03)', padding: '12px 16px', borderRadius: '12px', border: '1px solid var(--border-color)', fontSize: '13px' }}>
           <span style={{ color: 'var(--text-secondary)' }}>
-            Đang lọc: <strong>{specialFilter === 'discharge' ? 'Hồ đang mở cửa xả lũ qua tràn' : 'Hồ có mức nước cảnh báo nguy hiểm/tiệm cận'}</strong>. 
+            Đang lọc: <strong>{specialFilter === 'discharge' ? 'Hồ đang mở cửa xả lũ qua tràn' : specialFilter === 'warning' ? 'Hồ có mức nước cảnh báo nguy hiểm/tiệm cận' : 'Hồ có mực nước thấp (dưới 15% dung tích hữu ích)'}</strong>. 
             <span style={{ color: 'var(--color-primary)', marginLeft: '6px' }}>
               (Đã tự động hiển thị toàn bộ 5 hồ chứa thuộc hệ thống bậc thang Sông Đà để giám sát liên hồ).
             </span>
@@ -1462,6 +1519,31 @@ export default function Dashboard() {
                         <line x1={chartProps.paddingLeft} y1={chartProps.height - chartProps.paddingBottom} x2={chartProps.width - chartProps.paddingRight} y2={chartProps.height - chartProps.paddingBottom} stroke="rgba(255,255,255,0.05)" />
                         
                         {/* Limit line (Hcontrol) if in range */}
+                        {chartProps.hControlY !== null && (
+                          <g>
+                            <line 
+                              x1={chartProps.paddingLeft} 
+                              y1={chartProps.hControlY} 
+                              x2={chartProps.width - chartProps.paddingRight} 
+                              y2={chartProps.hControlY} 
+                              stroke="var(--color-warning)" 
+                              strokeWidth="1.5" 
+                              strokeDasharray="4 4" 
+                              opacity="0.8"
+                            />
+                            <text 
+                              x={chartProps.width - chartProps.paddingRight - 4} 
+                              y={chartProps.hControlY - 4} 
+                              fill="var(--color-warning)" 
+                              fontSize="8" 
+                              fontWeight="600" 
+                              textAnchor="end"
+                            >
+                              Giới hạn lũ ({selectedReservoir.hControl.toFixed(1)}m)
+                            </text>
+                          </g>
+                        )}
+
                         {/* Y Labels */}
                         <text x={chartProps.paddingLeft - 8} y={chartProps.paddingTop + 4} fill="var(--text-muted)" fontSize="10" textAnchor="end">{chartProps.yMax}m</text>
                         <text x={chartProps.paddingLeft - 8} y={chartProps.height - chartProps.paddingBottom + 3} fill="var(--text-muted)" fontSize="10" textAnchor="end">{chartProps.yMin}m</text>
