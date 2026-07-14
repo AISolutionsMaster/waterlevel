@@ -176,6 +176,11 @@ button, input, select {
   transition: all 0.2s ease;
 }
 
+.input-control option {
+  background-color: #11182b; /* match --bg-surface-solid */
+  color: var(--text-primary);
+}
+
 .input-control:focus {
   border-color: var(--color-primary);
   background: rgba(255, 255, 255, 0.08);
