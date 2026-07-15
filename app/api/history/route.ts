@@ -34,7 +34,7 @@ export async function GET(request: Request) {
   // 1. Fetch from Neon Postgres if configured
   if (sql) {
     try {
-      history = await sql`
+      const rawHistory = await sql`
         SELECT 
           timestamp, 
           htl, 
@@ -47,6 +47,14 @@ export async function GET(request: Request) {
           AND timestamp >= ${thresholdDate.toISOString()}
         ORDER BY timestamp ASC
       `;
+      history = rawHistory.map((r: any) => ({
+        timestamp: r.timestamp,
+        htl: Number(r.htl) || 0,
+        qve: Number(r.qve) || 0,
+        q_x: Number(r.q_x) || 0,
+        qxt: Number(r.qxt) || 0,
+        qxm: Number(r.qxm) || 0
+      }));
       isFromDb = history.length > 0;
     } catch (dbError) {
       console.error(`Failed to fetch history for ${name} from DB:`, dbError);

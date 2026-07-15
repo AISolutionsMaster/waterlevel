@@ -102,13 +102,24 @@ export async function GET(request: Request) {
 
   // 3. Enrich the records with our metadata, seasonal alerts, and transition warnings
   const enrichedData = latestData.map(item => {
+    // Explicitly parse string numeric types from Postgres to JS Numbers
+    const htl = Number(item.htl) || 0;
+    const hdbt = Number(item.hdbt) || 0;
+    const hc = Number(item.hc) || 0;
+    const qve = Number(item.qve) || 0;
+    const q_x = Number(item.q_x) || 0;
+    const qxt = Number(item.qxt) || 0;
+    const qxm = Number(item.qxm) || 0;
+    const ncxs = Number(item.ncxs) || 0;
+    const ncxm = Number(item.ncxm) || 0;
+
     const meta = reservoirsMetadata[item.name] || {
       name: item.name,
       riverBasin: "Chưa phân loại",
       region: item.region || "Khác",
-      hdbt: item.hdbt,
-      hc: item.hc,
-      hMinOp: item.hc,
+      hdbt: hdbt,
+      hc: hc,
+      hMinOp: hc,
       seasons: []
     };
 
@@ -117,9 +128,9 @@ export async function GET(request: Request) {
     
     // Safety thresholds
     const hControl = activePhase ? activePhase.hControl : meta.hdbt;
-    const isExceeded = item.htl >= hControl;
-    const isUpcomingWarning = !isExceeded && (hControl - item.htl <= 0.5); // 0.5m warning window
-    const isCậnDeadLevel = item.htl <= meta.hMinOp;
+    const isExceeded = htl >= hControl;
+    const isUpcomingWarning = !isExceeded && (hControl - htl <= 0.5); // 0.5m warning window
+    const isCậnDeadLevel = htl <= meta.hMinOp;
 
     let status: "normal" | "warning" | "danger" | "dead" = "normal";
     if (isCậnDeadLevel) status = "dead";
@@ -127,14 +138,23 @@ export async function GET(request: Request) {
     else if (isUpcomingWarning) status = "warning";
 
     const powerGen = estimateHydroPower(
-      Number(item.htl),
-      Number(item.qxm),
+      htl,
+      qxm,
       meta.tailraceElev,
       meta.installedCapacity
     );
 
     return {
       ...item,
+      htl,
+      hdbt,
+      hc,
+      qve,
+      q_x,
+      qxt,
+      qxm,
+      ncxs,
+      ncxm,
       riverBasin: meta.riverBasin,
       region: meta.region || item.region || "Khác",
       hMinOp: meta.hMinOp,
