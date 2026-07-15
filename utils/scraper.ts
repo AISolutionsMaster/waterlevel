@@ -44,14 +44,19 @@ export async function fetchWaterLevels(targetDate?: Date): Promise<ScrapeRecord[
   const queryYear = targetDate ? targetDate.getFullYear() : new Date().getFullYear();
   const queryMonth = targetDate ? targetDate.getMonth() + 1 : new Date().getMonth() + 1;
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
   try {
     const response = await fetch(url, {
       cache: 'no-store',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-      }
+      },
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`EVN site responded with status ${response.status}`);

@@ -53,11 +53,11 @@ export async function initDatabaseSchema() {
       ON water_level_history (reservoir_name, timestamp DESC)
     `;
 
-    // Self-healing: Seed history-store.json to Neon Postgres if database is empty
+    // Self-healing: Seed history-store.json to Neon Postgres if database is empty or incomplete
     const countResult = await sql`SELECT COUNT(*)::int as count FROM water_level_history`;
     const count = countResult[0]?.count || 0;
-    if (count === 0) {
-      console.log("Database table water_level_history is empty. Seeding historical data from local JSON database...");
+    if (count < 1000) {
+      console.log("Database table water_level_history has insufficient data. Seeding historical data from local JSON database...");
       const localData = readLocalJsonDb();
       if (localData.length > 0) {
         console.log(`Found ${localData.length} local records to seed.`);
