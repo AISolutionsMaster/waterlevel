@@ -63,17 +63,43 @@ export async function initDatabaseSchema() {
         console.log(`Found ${localData.length} local records to seed.`);
         const validRecords = localData.filter((r: any) => r.reservoir_name !== 'SYSTEM_PLACEHOLDER');
         
-        // Seed sequentially in batches of 50 to avoid overloading the Neon Postgres connection pool
-        const batchSize = 50;
-        for (let i = 0; i < validRecords.length; i += batchSize) {
-          const batch = validRecords.slice(i, i + batchSize);
-          await Promise.all(batch.map((r: any) => sql`
+        // Seed in chunks of 2000 using Postgres UNNEST for high-performance single-query batch insertion
+        const chunkSize = 2000;
+        for (let i = 0; i < validRecords.length; i += chunkSize) {
+          const chunk = validRecords.slice(i, i + chunkSize);
+          const names = chunk.map((r: any) => r.reservoir_name);
+          const timestamps = chunk.map((r: any) => r.timestamp);
+          const htls = chunk.map((r: any) => r.htl);
+          const hdbts = chunk.map((r: any) => r.hdbt);
+          const hcs = chunk.map((r: any) => r.hc);
+          const qves = chunk.map((r: any) => r.qve);
+          const q_xs = chunk.map((r: any) => r.q_x);
+          const qxts = chunk.map((r: any) => r.qxt);
+          const qxms = chunk.map((r: any) => r.qxm);
+          const ncxss = chunk.map((r: any) => r.ncxs);
+          const ncxms = chunk.map((r: any) => r.ncxm);
+          const syncTimes = chunk.map((r: any) => r.sync_time);
+
+          await sql`
             INSERT INTO water_level_history (
               reservoir_name, timestamp, htl, hdbt, hc, qve, q_x, qxt, qxm, ncxs, ncxm, sync_time
-            ) VALUES (
-              ${r.reservoir_name}, ${r.timestamp}, ${r.htl}, ${r.hdbt}, ${r.hc}, ${r.qve}, ${r.q_x}, ${r.qxt}, ${r.qxm}, ${r.ncxs}, ${r.ncxm}, ${r.sync_time}
-            ) ON CONFLICT (reservoir_name, timestamp) DO NOTHING
-          `));
+            ) 
+            SELECT * FROM UNNEST(
+              ${names}::varchar[], 
+              ${timestamps}::timestamptz[], 
+              ${htls}::numeric[], 
+              ${hdbts}::numeric[], 
+              ${hcs}::numeric[], 
+              ${qves}::numeric[], 
+              ${q_xs}::numeric[], 
+              ${qxts}::numeric[], 
+              ${qxms}::numeric[], 
+              ${ncxss}::integer[], 
+              ${ncxms}::integer[], 
+              ${syncTimes}::varchar[]
+            )
+            ON CONFLICT (reservoir_name, timestamp) DO NOTHING
+          `;
         }
         console.log("Historical seeding completed successfully.");
       }

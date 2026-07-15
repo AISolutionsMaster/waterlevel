@@ -31,6 +31,97 @@ async function handleScrape(request: Request) {
     }
   }
 
+  // 1.5. External Data Injection Support (Bypass EVN IP blocking on Vercel)
+  // If the request is a POST and contains a JSON body with records, insert them directly.
+  if (request.method === 'POST') {
+    try {
+      const clonedRequest = request.clone();
+      const body = await clonedRequest.json();
+      if (body && Array.isArray(body.records)) {
+        console.log(`Received ${body.records.length} external records via POST injection. Saving to DB...`);
+        await initDatabaseSchema();
+        const sql = getDb();
+        if (sql) {
+          let insertedCount = 0;
+          for (const r of body.records) {
+            await sql`
+              INSERT INTO water_level_history (
+                reservoir_name, timestamp, htl, hdbt, hc, qve, q_x, qxt, qxm, ncxs, ncxm, sync_time
+              ) VALUES (
+                ${r.reservoir_name || r.name}, 
+                ${r.timestamp}, 
+                ${r.htl}, 
+                ${r.hdbt}, 
+                ${r.hc}, 
+                ${r.qve}, 
+                ${r.q_x}, 
+                ${r.qxt}, 
+                ${r.qxm}, 
+                ${r.ncxs}, 
+                ${r.ncxm}, 
+                ${r.sync_time || r.syncTimeText}
+              )
+              ON CONFLICT (reservoir_name, timestamp) 
+              DO UPDATE SET
+                htl = EXCLUDED.htl,
+                qve = EXCLUDED.qve,
+                q_x = EXCLUDED.q_x,
+                qxt = EXCLUDED.qxt,
+                qxm = EXCLUDED.qxm,
+                ncxs = EXCLUDED.ncxs,
+                ncxm = EXCLUDED.ncxm,
+                sync_time = EXCLUDED.sync_time
+            `;
+            insertedCount++;
+          }
+          return NextResponse.json({
+            success: true,
+            mode: 'external_injection',
+            insertedRows: insertedCount
+          });
+        } else {
+          // No Postgres, save to local JSON DB
+          const { readLocalJsonDb, writeLocalJsonDb } = require('../../../../utils/db');
+          const localData = readLocalJsonDb();
+          let insertedCount = 0;
+          for (const r of body.records) {
+            const rName = r.reservoir_name || r.name;
+            const rTime = r.timestamp;
+            const idx = localData.findIndex((item: any) => item.reservoir_name === rName && new Date(item.timestamp).getTime() === new Date(rTime).getTime());
+            const dbRecord = {
+              reservoir_name: rName,
+              timestamp: rTime,
+              htl: r.htl,
+              hdbt: r.hdbt,
+              hc: r.hc,
+              qve: r.qve,
+              q_x: r.q_x,
+              qxt: r.qxt,
+              qxm: r.qxm,
+              ncxs: r.ncxs,
+              ncxm: r.ncxm,
+              sync_time: r.sync_time || r.syncTimeText
+            };
+            if (idx >= 0) {
+              localData[idx] = dbRecord;
+            } else {
+              localData.push(dbRecord);
+            }
+            insertedCount++;
+          }
+          writeLocalJsonDb(localData);
+          return NextResponse.json({
+            success: true,
+            mode: 'local_json_injection',
+            insertedRows: insertedCount
+          });
+        }
+      }
+    } catch (e: any) {
+      console.warn("Failed to parse or process POST body injection:", e);
+    }
+  }
+
   // 2. Initialize Database & Get connection
   await initDatabaseSchema();
   const sql = getDb();
