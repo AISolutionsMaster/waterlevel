@@ -53,6 +53,32 @@ export async function initDatabaseSchema() {
       ON water_level_history (reservoir_name, timestamp DESC)
     `;
 
+    // Self-healing: Seed history-store.json to Neon Postgres if database is empty
+    const countResult = await sql`SELECT COUNT(*)::int as count FROM water_level_history`;
+    const count = countResult[0]?.count || 0;
+    if (count === 0) {
+      console.log("Database table water_level_history is empty. Seeding historical data from local JSON database...");
+      const localData = readLocalJsonDb();
+      if (localData.length > 0) {
+        console.log(`Found ${localData.length} local records to seed.`);
+        const validRecords = localData.filter((r: any) => r.reservoir_name !== 'SYSTEM_PLACEHOLDER');
+        
+        // Seed sequentially in batches of 50 to avoid overloading the Neon Postgres connection pool
+        const batchSize = 50;
+        for (let i = 0; i < validRecords.length; i += batchSize) {
+          const batch = validRecords.slice(i, i + batchSize);
+          await Promise.all(batch.map((r: any) => sql`
+            INSERT INTO water_level_history (
+              reservoir_name, timestamp, htl, hdbt, hc, qve, q_x, qxt, qxm, ncxs, ncxm, sync_time
+            ) VALUES (
+              ${r.reservoir_name}, ${r.timestamp}, ${r.htl}, ${r.hdbt}, ${r.hc}, ${r.qve}, ${r.q_x}, ${r.qxt}, ${r.qxm}, ${r.ncxs}, ${r.ncxm}, ${r.sync_time}
+            ) ON CONFLICT (reservoir_name, timestamp) DO NOTHING
+          `));
+        }
+        console.log("Historical seeding completed successfully.");
+      }
+    }
+
     console.log("Database schema initialized successfully.");
     return true;
   } catch (error) {
@@ -142,6 +168,24 @@ export async function initOverridesSchema() {
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       )
     `;
+
+    // Self-healing: Seed overrides from local JSON file if database is empty
+    const countResult = await sql`SELECT COUNT(*)::int as count FROM river_level_overrides`;
+    const count = countResult[0]?.count || 0;
+    if (count === 0) {
+      const localOverrides = readLocalOverrides();
+      const entries = Object.entries(localOverrides);
+      if (entries.length > 0) {
+        console.log("Database table river_level_overrides is empty. Seeding local overrides to database...");
+        await Promise.all(entries.map(([station, val]) => sql`
+          INSERT INTO river_level_overrides (station_name, override_level, updated_at)
+          VALUES (${station}, ${val}, CURRENT_TIMESTAMP)
+          ON CONFLICT (station_name) DO NOTHING
+        `));
+        console.log("Overrides seeding completed successfully.");
+      }
+    }
+
     return true;
   } catch (error) {
     console.error("Failed to initialize overrides schema:", error);
