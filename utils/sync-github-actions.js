@@ -101,34 +101,51 @@ async function getVietnamProxies() {
   }
 }
 
-// Fetch EVN page using a specific proxy agent
-async function fetchPageWithProxy(targetDate, proxy) {
-  let url = 'https://hochuathuydien.evn.com.vn/PageHoChuaThuyDienEmbedEVN.aspx';
-  if (targetDate) {
-    url += `?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
-  }
+// Fetch EVN page using a specific proxy agent via native https module
+function fetchPageWithProxy(targetDate, proxy) {
+  return new Promise((resolve, reject) => {
+    let pathQuery = '/PageHoChuaThuyDienEmbedEVN.aspx';
+    if (targetDate) {
+      pathQuery += `?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
+    }
 
-  const agent = new HttpsProxyAgent(`http://${proxy}`);
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 seconds timeout per proxy check
-
-  try {
-    const response = await fetch(url, {
-      agent, // Node standard fetch accepts custom agents (https-proxy-agent)
+    const https = require('https');
+    const agent = new HttpsProxyAgent(`http://${proxy}`);
+    
+    const options = {
+      hostname: 'hochuathuydien.evn.com.vn',
+      port: 443,
+      path: pathQuery,
+      method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
+      agent: agent,
+      timeout: 10000 // 10 seconds timeout
+    };
 
-    if (!response.ok) return null;
-    return await response.text();
-  } catch (e) {
-    clearTimeout(timeoutId);
-    return null;
-  }
+    const req = https.request(options, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return resolve(null); // Return null on bad status to try next proxy
+      }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve(body));
+    });
+
+    req.on('error', (e) => {
+      resolve(null);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(null);
+    });
+
+    req.end();
+  });
 }
 
 async function main() {
