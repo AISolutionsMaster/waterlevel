@@ -195,6 +195,75 @@ export default function Dashboard() {
     }
   }), []);
 
+  // Compute total inflow/outflow metrics for the selected cascade
+  const cascadeStats = useMemo(() => {
+    const reservoirNames = CASCADES[selectedCascade]?.reservoirs || [];
+    let totalQve = 0;
+    let totalQx = 0;
+    let totalQxt = 0;
+    let totalWastedPowerMW = 0;
+    
+    reservoirNames.forEach(name => {
+      const item = waterLevels.find(w => w.name === name);
+      if (item) {
+        totalQve += item.qve || 0;
+        totalQx += item.q_x || 0;
+        totalQxt += item.qxt || 0;
+        
+        // Sum potential wasted power for reservoirs with tailraceElev
+        if (item.qxt > 0 && item.tailraceElev) {
+          const head = item.htl - item.tailraceElev;
+          if (head > 0) {
+            const powerKw = 0.85 * 9.81 * item.qxt * head;
+            totalWastedPowerMW += powerKw / 1000;
+          }
+        }
+      }
+    });
+    
+    const totalWastedVolumeM3PerHour = totalQxt * 3600;
+    const totalWastedMillionM3PerHour = totalWastedVolumeM3PerHour / 1000000;
+    
+    return { totalQve, totalQx, totalQxt, totalWastedPowerMW, totalWastedMillionM3PerHour };
+  }, [selectedCascade, waterLevels, CASCADES]);
+
+  // Compute accumulated metrics from history data over the selected timeframe
+  const cascadeHistoryStats = useMemo(() => {
+    const reservoirNames = CASCADES[selectedCascade]?.reservoirs || [];
+    let accumulatedWastedVolumeM3 = 0;
+    let accumulatedWastedEnergyMWh = 0;
+    
+    reservoirNames.forEach(name => {
+      const historyData = cascadeHistory[name] || [];
+      const item = waterLevels.find(w => w.name === name);
+      const tailraceElev = item?.tailraceElev || null;
+      
+      historyData.forEach(pt => {
+        const qxt = Number(pt.qxt) || 0;
+        const htl = Number(pt.htl) || 0;
+        
+        if (qxt > 0) {
+          accumulatedWastedVolumeM3 += qxt * 3600; // 1 hour of flow in m3
+          
+          if (tailraceElev) {
+            const head = htl - tailraceElev;
+            if (head > 0) {
+              const powerKw = 0.85 * 9.81 * qxt * head;
+              accumulatedWastedEnergyMWh += powerKw / 1000; // 1 hour of MW = 1 MWh
+            }
+          }
+        }
+      });
+    });
+    
+    const accumulatedWastedMillionM3 = accumulatedWastedVolumeM3 / 1000000;
+    
+    return {
+      accumulatedWastedMillionM3,
+      accumulatedWastedEnergyMWh
+    };
+  }, [selectedCascade, cascadeHistory, CASCADES]);
+
   const loadCascadeHistories = async (cascadeKey: keyof typeof CASCADES, range = historyRange) => {
     setCascadeLoading(true);
     try {
@@ -1308,8 +1377,63 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div style={{ color: 'var(--text-secondary)', fontSize: '13px', maxWidth: '800px', lineHeight: '1.4' }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '13px', maxWidth: '800px', lineHeight: '1.4', marginBottom: '12px' }}>
             {CASCADES[selectedCascade].description}
+          </div>
+
+          {/* Cascade Total Inflow/Outflow Metrics Summary */}
+          <div style={{ 
+            display: 'flex', 
+            gap: '24px', 
+            marginBottom: '20px', 
+            padding: '12px 20px', 
+            background: 'rgba(255,255,255,0.02)', 
+            border: '1px solid var(--border-color)', 
+            borderRadius: '10px',
+            width: 'fit-content',
+            flexWrap: 'wrap'
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '600', letterSpacing: '0.05em' }}>TỔNG LƯỢNG NƯỚC VỀ BẬC THANG</span>
+              <strong style={{ fontSize: '18px', color: 'var(--color-success)' }}>
+                {cascadeStats.totalQve.toLocaleString()} <span style={{ fontSize: '11px', fontWeight: 'normal', color: 'var(--text-secondary)' }}>m³/s</span>
+              </strong>
+            </div>
+            
+            <div style={{ width: '1px', background: 'var(--border-color)', alignSelf: 'stretch' }} />
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '600', letterSpacing: '0.05em' }}>TỔNG LƯỢNG NƯỚC XẢ BẬC THANG</span>
+              <strong style={{ fontSize: '18px', color: cascadeStats.totalQx > 0 ? 'var(--color-primary)' : 'var(--text-secondary)' }}>
+                {cascadeStats.totalQx.toLocaleString()} <span style={{ fontSize: '11px', fontWeight: 'normal', color: 'var(--text-secondary)' }}>m³/s</span>
+              </strong>
+            </div>
+
+            <div style={{ width: '1px', background: 'var(--border-color)', alignSelf: 'stretch' }} />
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '600', letterSpacing: '0.05em' }}>TỔNG XẢ QUA TRÀN (XẢ LŨ)</span>
+              <strong style={{ fontSize: '18px', color: cascadeStats.totalQxt > 0 ? 'var(--color-danger)' : 'var(--text-secondary)' }}>
+                {cascadeStats.totalQxt.toLocaleString()} <span style={{ fontSize: '11px', fontWeight: 'normal', color: 'var(--text-secondary)' }}>m³/s</span>
+              </strong>
+            </div>
+
+            <div style={{ width: '1px', background: 'var(--border-color)', alignSelf: 'stretch' }} />
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxWidth: '340px' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '600', letterSpacing: '0.05em' }}>ĐIỆN NĂNG LÃNG PHÍ TIỀN NĂNG</span>
+              <strong style={{ fontSize: '18px', color: cascadeStats.totalWastedPowerMW > 0 ? 'var(--color-danger)' : 'var(--text-secondary)' }}>
+                {cascadeStats.totalWastedPowerMW.toFixed(1)} <span style={{ fontSize: '11px', fontWeight: 'normal', color: 'var(--text-secondary)' }}>MW</span>
+              </strong>
+              <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: '1.3' }}>
+                Tức thời: ~ {(cascadeStats.totalWastedPowerMW / 1000).toFixed(2)} triệu kWh/h (~ {cascadeStats.totalWastedMillionM3PerHour.toFixed(2)} triệu m³/h)
+              </span>
+              {cascadeHistoryStats.accumulatedWastedMillionM3 > 0 && (
+                <span style={{ fontSize: '9px', color: 'var(--color-danger)', fontWeight: '600', marginTop: '2px', lineHeight: '1.3' }}>
+                  Tích lũy ({historyRange === "3d" ? "3 ngày" : historyRange === "7d" ? "7 ngày" : historyRange === "15d" ? "15 ngày" : historyRange === "30d" ? "30 ngày" : "Lịch sử"}): ~ {cascadeHistoryStats.accumulatedWastedMillionM3.toFixed(2)} triệu m³ (~ {(cascadeHistoryStats.accumulatedWastedEnergyMWh / 1000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} triệu kWh)
+                </span>
+              )}
+            </div>
           </div>
 
           {cascadeLoading ? (
@@ -1436,6 +1560,55 @@ export default function Dashboard() {
                               <span style={{ color: 'var(--text-secondary)' }}>Tổng xả (Qx):</span>
                               <span style={{ color: item.q_x > 0 ? 'var(--color-primary)' : 'var(--text-secondary)', fontWeight: '600' }}>{item.q_x.toLocaleString()}</span>
                             </div>
+
+                            {/* Spillway xả lũ warning in cascade card */}
+                            {(item.qxt > 0 || item.ncxs > 0 || item.ncxm > 0) && (
+                              <div style={{ 
+                                marginTop: '8px', 
+                                padding: '6px 8px', 
+                                borderRadius: '6px', 
+                                background: 'rgba(239, 68, 68, 0.05)', 
+                                border: '1px solid rgba(239, 68, 68, 0.15)', 
+                                fontSize: '10px',
+                                lineHeight: '1.3'
+                              }}>
+                                <span style={{ fontWeight: '600', color: 'var(--color-danger)', display: 'block', marginBottom: '2px' }}>
+                                  🌊 Đang xả lũ:
+                                </span>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
+                                  <span>Xả tràn (Qxt):</span>
+                                  <strong style={{ color: 'var(--color-danger)' }}>{item.qxt.toLocaleString()} m³/s</strong>
+                                </div>
+                                {(item.ncxs > 0 || item.ncxm > 0) && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                    <span>Cửa mở:</span>
+                                    <strong style={{ color: 'var(--color-danger)' }}>{item.ncxs}S / {item.ncxm}M</strong>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Transition warning alert in cascade card */}
+                            {item.transitionAlert && (
+                              <div style={{ 
+                                background: 'rgba(245, 158, 11, 0.06)', 
+                                border: '1px solid rgba(245, 158, 11, 0.15)', 
+                                padding: '6px 8px', 
+                                borderRadius: '6px', 
+                                fontSize: '10px',
+                                lineHeight: '1.3',
+                                marginTop: '8px',
+                                color: 'var(--text-primary)'
+                              }}>
+                                <span style={{ fontWeight: '600', color: 'var(--color-warning)', display: 'block', marginBottom: '2px' }}>
+                                  ⚠️ Giai đoạn kế tiếp:
+                                </span>
+                                <strong>{item.transitionAlert.daysRemaining} ngày</strong> nữa sang <strong>{item.transitionAlert.nextSeasonName}</strong>. 
+                                {item.transitionAlert.nextHControl !== item.transitionAlert.currentHControl && (
+                                  <> Hctl: {item.transitionAlert.currentHControl.toFixed(1)}m ➜ {item.transitionAlert.nextHControl.toFixed(1)}m.</>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -2070,6 +2243,47 @@ export default function Dashboard() {
                   <p style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '8px', fontStyle: 'italic', lineHeight: '1.4' }}>
                      * Ước lượng vật lý theo lưu lượng qua nhà máy {selectedReservoir.qxm.toLocaleString()} m³/s, hiệu suất η = 85%, mực nước hạ lưu trung bình {selectedReservoir.tailraceElev}m và công suất lắp máy tối đa {selectedReservoir.installedCapacity}MW.
                   </p>
+
+                  {/* Wasted water and potential power loss calculation card */}
+                  {selectedReservoir.qxt > 0 && (() => {
+                    const head = selectedReservoir.htl - selectedReservoir.tailraceElev;
+                    if (head <= 0) return null;
+                    const eta = 0.85;
+                    const g = 9.81;
+                    const wastedPowerKw = eta * g * selectedReservoir.qxt * head;
+                    const wastedPowerMW = wastedPowerKw / 1000;
+                    const wastedMillionM3PerHour = (selectedReservoir.qxt * 3600) / 1000000;
+                    return (
+                      <div style={{ 
+                        marginTop: '16px', 
+                        padding: '12px 14px', 
+                        borderRadius: '10px', 
+                        background: 'rgba(239, 68, 68, 0.04)', 
+                        border: '1px solid rgba(239, 68, 68, 0.15)' 
+                      }}>
+                        <h5 style={{ fontSize: '11.5px', textTransform: 'uppercase', color: 'var(--color-danger)', letterSpacing: '0.05em', margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '700' }}>
+                          ⚡ Tổn thất năng lượng xả lũ (Wasted Power)
+                        </h5>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <div>
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block' }}>Công suất tổn hao</span>
+                            <strong style={{ fontSize: '16px', color: 'var(--color-danger)' }}>
+                              {wastedPowerMW.toFixed(1)} MW
+                            </strong>
+                          </div>
+                          <div>
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block' }}>Lượng nước lãng phí</span>
+                            <strong style={{ fontSize: '16px', color: 'var(--color-danger)' }}>
+                              {wastedMillionM3PerHour.toFixed(3)} triệu m³/h
+                            </strong>
+                          </div>
+                        </div>
+                        <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px', fontStyle: 'italic', margin: '8px 0 0 0', lineHeight: '1.4' }}>
+                          * Công suất điện năng bị lãng phí do lượng nước xả lũ {selectedReservoir.qxt.toLocaleString()} m³/s này không được dẫn qua tua-bin ở độ chênh mực nước {head.toFixed(1)}m.
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
