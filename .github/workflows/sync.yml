@@ -1,0 +1,29 @@
+name: Hourly Water Level Sync
+
+on:
+  schedule:
+    # Runs at the start of every hour (UTC)
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    # Allows manual triggering from the GitHub Actions UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install HTTP Proxy Agent
+        run: npm install https-proxy-agent
+
+      - name: Run Proxy Crawl and Sync Script
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: node utils/sync-github-actions.js

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDb, initDatabaseSchema } from '../../../../utils/db';
-import { fetchWaterLevels } from '../../../../utils/scraper';
+import { fetchWaterLevels, parseEvnHtml } from '../../../../utils/scraper';
 
 export const maxDuration = 60; // Extend serverless timeout to 60s for backfilling support
 export const dynamic = 'force-dynamic';
@@ -32,13 +32,40 @@ async function handleScrape(request: Request) {
   }
 
   // 1.5. External Data Injection Support (Bypass EVN IP blocking on Vercel)
-  // If the request is a POST and contains a JSON body with records, insert them directly.
+  // If the request is a POST and contains a JSON body with records or raw html, process and insert them directly.
   if (request.method === 'POST') {
     try {
       const clonedRequest = request.clone();
       const body = await clonedRequest.json();
+      
+      if (body && body.html) {
+        console.log(`Received raw HTML payload via POST injection. Parsing...`);
+        const systemDate = body.targetDate ? new Date(body.targetDate) : new Date();
+        systemDate.setMinutes(0, 0, 0);
+        systemDate.setSeconds(0, 0);
+        
+        const queryYear = systemDate.getFullYear();
+        const queryMonth = systemDate.getMonth() + 1;
+        
+        const parsedRecords = parseEvnHtml(body.html, queryYear, queryMonth, systemDate);
+        body.records = parsedRecords.map((r: any) => ({
+          reservoir_name: r.name,
+          timestamp: systemDate.toISOString(),
+          htl: r.htl,
+          hdbt: r.hdbt,
+          hc: r.hc,
+          qve: r.qve,
+          q_x: r.q_x,
+          qxt: r.qxt,
+          qxm: r.qxm,
+          ncxs: r.ncxs,
+          ncxm: r.ncxm,
+          sync_time: r.syncTimeText
+        }));
+      }
+
       if (body && Array.isArray(body.records)) {
-        console.log(`Received ${body.records.length} external records via POST injection. Saving to DB...`);
+        console.log(`Received ${body.records.length} records via POST injection. Saving to DB...`);
         await initDatabaseSchema();
         const sql = getDb();
         if (sql) {
