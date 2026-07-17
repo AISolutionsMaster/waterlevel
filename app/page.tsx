@@ -1971,7 +1971,7 @@ export default function Dashboard() {
                     if (isTransitionJuly) {
                       // Find next season (Lũ chính vụ) control level
                       const mainFloodLimit = selectedReservoir.name === "Hòa Bình" ? 101.0
-                                           : selectedReservoir.name === "Sơn La" ? 194.0
+                                           : selectedReservoir.name === "Sơn La" ? 197.3
                                            : selectedReservoir.name === "Tuyên Quang" ? 105.2
                                            : selectedReservoir.name === "Thác Bà" ? 56.0
                                            : selectedReservoir.name === "Bản Chát" ? 475.0
@@ -2007,7 +2007,7 @@ export default function Dashboard() {
                         <strong>Thời kỳ chuyển tiếp (10/07 - 19/07):</strong> Vận hành hạ mực nước dần về cao trình trước lũ chính vụ.
                       </li>
                       <li>
-                        <strong>Thời kỳ lũ chính vụ (20/07 - 21/08):</strong> Mực nước hồ khống chế ở mức thấp nhất trước lũ để sẵn sàng dung tích cắt lũ bảo vệ Hà Nội (Sơn La ≤ 194m, Hòa Bình ≤ 101m, Tuyên Quang ≤ 105.2m).
+                        <strong>Thời kỳ lũ chính vụ (20/07 - 21/08):</strong> Mực nước hồ khống chế ở mức thấp nhất trước lũ để sẵn sàng dung tích cắt lũ bảo vệ Hà Nội (Sơn La ≤ 197.3m, Hòa Bình ≤ 101m, Tuyên Quang ≤ 105.2m).
                       </li>
                     </ul>
                   </div>
