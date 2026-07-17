@@ -1855,8 +1855,9 @@ export default function Dashboard() {
             <strong>Dữ liệu mực nước các sông:</strong> Dự án hiện tại <strong>không có dữ liệu đo đạc thực tế</strong> của mực nước tại các con sông (như trạm Hà Nội trên sông Hồng, trạm Tuyên Quang trên sông Lô...). Các trị số mực nước sông hạ lưu hiển thị trên hệ thống là kết quả tính toán mô phỏng/giả lập dựa trên lưu lượng xả lũ để phục vụ học tập thuật toán điều tiết liên hồ chứa.
           </li>
         </ul>
-        <div style={{ marginTop: '12px', fontSize: '11px', textAlign: 'center', opacity: 0.6 }}>
-          © {new Date().getFullYear()} Giám sát Hồ Chứa Việt Nam • Dự án tham khảo cá nhân
+        <div style={{ marginTop: '12px', fontSize: '11px', textAlign: 'center', opacity: 0.6, display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+          <span>© {new Date().getFullYear()} Giám sát Hồ Chứa Việt Nam • Dự án tham khảo cá nhân</span>
+          <span>Liên hệ: <a href="mailto:mucnuochothuydien@gmail.com" style={{ color: 'var(--color-primary)', textDecoration: 'none' }} onMouseOver={(e) => e.currentTarget.style.textDecoration = 'underline'} onMouseOut={(e) => e.currentTarget.style.textDecoration = 'none'}>mucnuochothuydien@gmail.com</a></span>
         </div>
       </footer>
 
