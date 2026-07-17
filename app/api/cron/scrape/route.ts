@@ -165,9 +165,9 @@ async function handleScrape(request: Request) {
       
       const now = new Date();
       const currentHour = new Date(now);
-      currentHour.setMinutes(0, 0, 0);
+      currentHour.setUTCMinutes(0, 0, 0);
 
-      const startHour = new Date(2026, 5, 30, 0, 0, 0); // June 30, 2026
+      const startHour = new Date(Date.UTC(2026, 5, 29, 17, 0, 0)); // June 30, 2026 00:00:00 UTC+7
       const missingHours: Date[] = [];
       let checkTime = new Date(startHour);
 
@@ -286,10 +286,10 @@ async function handleScrape(request: Request) {
 
     const now = new Date();
     const currentHour = new Date(now);
-    currentHour.setMinutes(0, 0, 0); // Floor to current hour
+    currentHour.setUTCMinutes(0, 0, 0); // Floor to current hour
 
     // Generate list of missing hours from June 30, 2026 to currentHour
-    const startHour = new Date(2026, 5, 30, 0, 0, 0); // June 30, 2026
+    const startHour = new Date(Date.UTC(2026, 5, 29, 17, 0, 0)); // June 30, 2026 00:00:00 UTC+7
     const missingHours: Date[] = [];
     let checkTime = new Date(startHour);
 

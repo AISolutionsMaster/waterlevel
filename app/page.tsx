@@ -2012,9 +2012,9 @@ export default function Dashboard() {
                     </ul>
                   </div>
 
-                  <div style={{ marginTop: '4px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '8px' }}>
+                  <div style={{ marginTop: '4px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <a 
-                      href="https://vanban.chinhphu.vn/?pageid=27160&docid=197171" 
+                      href="https://congbao.chinhphu.vn/van-ban/quyet-dinh-so-740-qd-ttg-29131.htm" 
                       target="_blank" 
                       rel="noopener noreferrer"
                       style={{ 
@@ -2029,6 +2029,23 @@ export default function Dashboard() {
                       onMouseOut={(e) => e.currentTarget.style.textDecoration = 'none'}
                     >
                       🔗 Tra cứu Quyết định 740/QĐ-TTg (Quy trình liên hồ sông Hồng)
+                    </a>
+                    <a 
+                      href="https://congbao.chinhphu.vn/van-ban/quyet-dinh-so-922-qd-ttg-44877.htm" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      style={{ 
+                        color: 'var(--color-primary)', 
+                        textDecoration: 'none', 
+                        fontWeight: '600',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.textDecoration = 'underline'}
+                      onMouseOut={(e) => e.currentTarget.style.textDecoration = 'none'}
+                    >
+                      🔗 Tra cứu Quyết định 922/QĐ-TTg (Sửa đổi quy trình liên hồ sông Hồng)
                     </a>
                   </div>
                 </div>

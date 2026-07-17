@@ -92,7 +92,7 @@ export const reservoirsMetadata: Record<string, ReservoirMetadata> = {
     volumeExponent: 1.6,
     seasons: [
       { name: "Lũ sớm", startMonth: 6, startDay: 15, endMonth: 7, endDay: 19, hControl: 205.0 },
-      { name: "Lũ chính vụ", startMonth: 7, startDay: 20, endMonth: 8, endDay: 21, hControl: 197.3 },
+      { name: "Lũ chính vụ", startMonth: 7, startDay: 20, endMonth: 8, endDay: 21, hControl: 194.0 },
       { name: "Lũ muộn", startMonth: 8, startDay: 22, endMonth: 9, endDay: 15, hControl: 200.0 },
       { name: "Mùa cạn", startMonth: 9, startDay: 16, endMonth: 6, endDay: 14, hControl: 215.0 }
     ]

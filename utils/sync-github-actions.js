@@ -9,10 +9,11 @@ const VERCEL_DOMAIN = "https://mucnuochothuydien.vercel.app";
 const API_PATH = "/api/cron/scrape";
 
 function formatEvnDate(date) {
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  const hour = String(date.getHours()).padStart(2, '0');
+  const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const day = String(vnTime.getUTCDate()).padStart(2, '0');
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, '0');
+  const year = vnTime.getUTCFullYear();
+  const hour = String(vnTime.getUTCHours()).padStart(2, '0');
   return `${day}/${month}/${year} ${hour}:00`;
 }
 
@@ -176,13 +177,11 @@ async function main() {
   // 2. Fetch the last 6 hours of data using the working proxy
   console.log(`🕒 Tiến hành cào dữ liệu ${hoursToScrape} giờ gần nhất qua proxy: ${workingProxy}...`);
   for (let i = hoursToScrape - 1; i >= 0; i--) {
-    const targetDate = new Date();
-    targetDate.setHours(targetDate.getHours() - i);
+    const targetDate = new Date(Date.now() - i * 60 * 60 * 1000);
     
-    // Align parsedTimestamp to hourly bounds
+    // Align parsedTimestamp to hourly bounds in UTC
     const parsedTimestamp = new Date(targetDate);
-    parsedTimestamp.setMinutes(0, 0, 0);
-    parsedTimestamp.setSeconds(0, 0);
+    parsedTimestamp.setUTCMinutes(0, 0, 0);
     const timestampIso = parsedTimestamp.toISOString();
 
     console.log(`   -> Quét giờ: ${formatEvnDate(parsedTimestamp)}...`);

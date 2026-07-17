@@ -23,10 +23,11 @@ export interface ScrapeRecord {
  * Formats a Date object to EVN's query format: DD/MM/YYYY HH:mm
  */
 export function formatEvnDate(date: Date): string {
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  const hour = String(date.getHours()).padStart(2, '0');
+  const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const day = String(vnTime.getUTCDate()).padStart(2, '0');
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, '0');
+  const year = vnTime.getUTCFullYear();
+  const hour = String(vnTime.getUTCHours()).padStart(2, '0');
   return `${day}/${month}/${year} ${hour}:00`;
 }
 
@@ -41,8 +42,10 @@ export async function fetchWaterLevels(targetDate?: Date): Promise<ScrapeRecord[
     url += `?td=${encodeURIComponent(formattedDate)}`;
   }
 
-  const queryYear = targetDate ? targetDate.getFullYear() : new Date().getFullYear();
-  const queryMonth = targetDate ? targetDate.getMonth() + 1 : new Date().getMonth() + 1;
+  const dateToUse = targetDate || new Date();
+  const vnTime = new Date(dateToUse.getTime() + 7 * 60 * 60 * 1000);
+  const queryYear = vnTime.getUTCFullYear();
+  const queryMonth = vnTime.getUTCMonth() + 1;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 3000);
