@@ -65,6 +65,9 @@ interface HistoryPoint {
   q_x: number;
   qxt: number;
   qxm: number;
+  ncxs?: number;
+  ncxm?: number;
+  isForecast?: boolean;
 }
 
 export default function Dashboard() {
@@ -90,6 +93,13 @@ export default function Dashboard() {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [cascadeHoverIndex, setCascadeHoverIndex] = useState<number | null>(null);
   const [historyRange, setHistoryRange] = useState<"3d" | "7d" | "15d" | "30d" | "1y">("3d");
+
+  // Forecasting states
+  const [forecastScenario, setForecastScenario] = useState<'constant' | 'flood' | 'flood_sonla' | 'flood_hoabinh' | 'dry'>('constant');
+  const [forecastRange, setForecastRange] = useState<'3d' | '7d' | '30d'>('3d');
+  const [forecastData, setForecastData] = useState<HistoryPoint[]>([]);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastHoverIndex, setForecastHoverIndex] = useState<number | null>(null);
 
   // Overrides for river levels
   const [overrides, setOverrides] = useState<Record<string, number>>({});
@@ -271,10 +281,27 @@ export default function Dashboard() {
       const promises = resList.map(async (name) => {
         const currentItem = waterLevels.find(w => w.name === name);
         const currentHtl = currentItem ? currentItem.htl : 0;
-        const res = await fetch(`/api/history?reservoir=${encodeURIComponent(name)}&current=${currentHtl}&range=${range}&t=${Date.now()}`);
-        if (!res.ok) throw new Error(`Lỗi tải lịch sử hồ ${name}`);
-        const result = await res.json();
-        return { name, data: result.success ? result.data : [] };
+        
+        // Fetch history
+        const resHist = await fetch(`/api/history?reservoir=${encodeURIComponent(name)}&current=${currentHtl}&range=${range}&t=${Date.now()}`);
+        if (!resHist.ok) throw new Error(`Lỗi tải lịch sử hồ ${name}`);
+        const resultHist = await resHist.json();
+
+        // Fetch forecast
+        const resFore = await fetch(`/api/forecast?reservoir=${encodeURIComponent(name)}&range=${forecastRange}&scenario=${forecastScenario}&t=${Date.now()}`);
+        if (!resFore.ok) throw new Error(`Lỗi tải dự báo hồ ${name}`);
+        const resultFore = await resFore.json();
+
+        const histData = resultHist.success ? resultHist.data : [];
+        const foreData = resultFore.success ? resultFore.data : [];
+
+        // Combine history + forecast
+        const combinedData = [
+          ...histData.map((h: any) => ({ ...h, isForecast: false })),
+          ...foreData.map((f: any) => ({ ...f, isForecast: true }))
+        ];
+
+        return { name, data: combinedData };
       });
       const results = await Promise.all(promises);
       const newHistoryMap: Record<string, HistoryPoint[]> = {};
@@ -293,7 +320,7 @@ export default function Dashboard() {
     if (viewMode === "cascade" && waterLevels.length > 0) {
       loadCascadeHistories(selectedCascade, historyRange);
     }
-  }, [viewMode, selectedCascade, historyRange, waterLevels]);
+  }, [viewMode, selectedCascade, historyRange, forecastScenario, forecastRange, waterLevels]);
 
   // Fetch history for detailed drawer
   const fetchReservoirHistory = async (reservoirName: string, currentHtl: number, rangeStr = historyRange) => {
@@ -313,6 +340,18 @@ export default function Dashboard() {
   };
 
   const handleRangeChange = (range: "3d" | "7d" | "15d" | "30d" | "1y") => {
+    setHistoryRange(range);
+    if (range === '3d' || range === '7d' || range === '30d') {
+      setForecastRange(range);
+    }
+    if (selectedReservoir) {
+      setHistory([]);
+      fetchReservoirHistory(selectedReservoir.name, selectedReservoir.htl, range);
+    }
+  };
+
+  const handleForecastRangeChange = (range: "3d" | "7d" | "30d") => {
+    setForecastRange(range);
     setHistoryRange(range);
     if (selectedReservoir) {
       setHistory([]);
@@ -380,10 +419,34 @@ export default function Dashboard() {
     setCascadeHoverIndex(null);
   };
 
+  const fetchForecast = async (reservoirName: string, rangeStr = forecastRange, scenarioStr = forecastScenario) => {
+    setForecastLoading(true);
+    try {
+      const res = await fetch(`/api/forecast?reservoir=${encodeURIComponent(reservoirName)}&range=${rangeStr}&scenario=${scenarioStr}&t=${Date.now()}`);
+      if (!res.ok) throw new Error("Không thể kết nối API dự báo");
+      const result = await res.json();
+      if (result.success && result.data) {
+        setForecastData(result.data);
+      }
+    } catch (e) {
+      console.error("Lỗi tải dự báo:", e);
+    } finally {
+      setForecastLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedReservoir) {
+      fetchForecast(selectedReservoir.name, forecastRange, forecastScenario);
+    }
+  }, [selectedReservoir?.name, forecastRange, forecastScenario]);
+
   const handleSelectReservoir = (res: ReservoirData) => {
     setSelectedReservoir(res);
     setHistory([]);
     setHoveredIndex(null); // clear hover state
+    setForecastData([]);
+    setForecastHoverIndex(null);
     fetchReservoirHistory(res.name, res.htl, historyRange);
   };
 
@@ -391,6 +454,10 @@ export default function Dashboard() {
     setSelectedReservoir(null);
     setHistory([]);
     setHoveredIndex(null); // clear hover state
+    setForecastData([]);
+    setForecastHoverIndex(null);
+    setForecastScenario('constant');
+    setForecastRange('3d');
   };
 
   // Get unique regions and basins for filter dropdowns
@@ -480,9 +547,10 @@ export default function Dashboard() {
     return waterLevels.filter(r => r.transitionAlert !== null);
   }, [waterLevels]);
 
-  // Custom SVG Line Chart coordinates calculations
-  const chartProps = useMemo(() => {
-    if (history.length === 0 || !selectedReservoir) return null;
+  // Custom SVG Combined Line Chart coordinates calculations (History + Forecast)
+  const combinedChartProps = useMemo(() => {
+    if (history.length === 0 && forecastData.length === 0) return null;
+    if (!selectedReservoir) return null;
 
     const width = 420;
     const height = 180;
@@ -491,34 +559,52 @@ export default function Dashboard() {
     const paddingTop = 15;
     const paddingBottom = 25;
 
-    const htls = history.map(h => h.htl);
+    // Combine points
+    const combined = [
+      ...history.map(h => ({ ...h, isForecast: false })),
+      ...forecastData.map(f => ({ ...f, isForecast: true }))
+    ];
+
+    const htls = combined.map(h => h.htl);
     const minH = Math.min(...htls);
     const maxH = Math.max(...htls);
     let hRange = maxH - minH;
-    
-    // Ensure chart has a minimum vertical scale range of 0.5 meters to prevent micro-fluctuations (noise) from looking like flood waves
-    if (hRange < 0.5) {
-      hRange = 0.5;
-    }
-    
+    if (hRange < 0.5) hRange = 0.5;
+
     const avg = (minH + maxH) / 2;
     const yMin = avg - hRange * 0.55;
     const yMax = avg + hRange * 0.55;
     const yRange = yMax - yMin;
 
-    const points = history.map((pt, idx) => {
-      const x = paddingLeft + (idx / (history.length - 1)) * (width - paddingLeft - paddingRight);
+    const points = combined.map((pt, idx) => {
+      const x = paddingLeft + (idx / (combined.length - 1)) * (width - paddingLeft - paddingRight);
       const y = height - paddingBottom - ((pt.htl - yMin) / yRange) * (height - paddingTop - paddingBottom);
-      return { x, y, htl: pt.htl, time: pt.timestamp };
+      return { x, y, htl: pt.htl, time: pt.timestamp, isForecast: pt.isForecast };
     });
 
-    // SVG path string
-    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    
-    // SVG area shade path string
-    const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - paddingBottom} L ${points[0].x} ${height - paddingBottom} Z`;
+    // Generate paths
+    const historyPoints = points.filter(p => !p.isForecast);
+    const forecastPoints = points.filter(p => p.isForecast);
 
-    // Calculate position for the hControl line if it fits on screen
+    let historyLinePath = "";
+    let historyAreaPath = "";
+    if (historyPoints.length > 0) {
+      historyLinePath = historyPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+      const lastHist = historyPoints[historyPoints.length - 1];
+      historyAreaPath = `${historyLinePath} L ${lastHist.x} ${height - paddingBottom} L ${historyPoints[0].x} ${height - paddingBottom} Z`;
+    }
+
+    let forecastLinePath = "";
+    let forecastAreaPath = "";
+    if (forecastPoints.length > 0) {
+      // Connect starting from the last history point to avoid gaps
+      const startPoint = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1] : forecastPoints[0];
+      forecastLinePath = `M ${startPoint.x} ${startPoint.y} ` + forecastPoints.map(p => `L ${p.x} ${p.y}`).join(' ');
+      forecastAreaPath = `${forecastLinePath} L ${forecastPoints[forecastPoints.length - 1].x} ${height - paddingBottom} L ${startPoint.x} ${height - paddingBottom} Z`;
+    }
+
+    const nowX = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].x : paddingLeft;
+
     const hControl = selectedReservoir.hControl;
     let hControlY = null;
     if (hControl >= yMin && hControl <= yMax) {
@@ -533,17 +619,21 @@ export default function Dashboard() {
       paddingTop,
       paddingBottom,
       points,
-      linePath,
-      areaPath,
+      historyLinePath,
+      historyAreaPath,
+      forecastLinePath,
+      forecastAreaPath,
+      nowX,
       yMin: yMin.toFixed(2),
       yMax: yMax.toFixed(2),
       hControlY
     };
-  }, [history, selectedReservoir]);
+  }, [history, forecastData, selectedReservoir]);
 
-  // Custom SVG Flow Chart coordinates calculations (Inflow vs Outflow)
-  const flowChartProps = useMemo(() => {
-    if (history.length === 0 || !selectedReservoir) return null;
+  // Custom SVG Combined Flow Chart coordinates calculations (Inflow vs Outflow)
+  const combinedFlowChartProps = useMemo(() => {
+    if (history.length === 0 && forecastData.length === 0) return null;
+    if (!selectedReservoir) return null;
 
     const width = 420;
     const height = 150;
@@ -552,8 +642,13 @@ export default function Dashboard() {
     const paddingTop = 15;
     const paddingBottom = 25;
 
-    const inflows = history.map(h => h.qve || 0);
-    const outflows = history.map(h => h.q_x || 0);
+    const combined = [
+      ...history.map(h => ({ ...h, isForecast: false })),
+      ...forecastData.map(f => ({ ...f, isForecast: true }))
+    ];
+
+    const inflows = combined.map(h => h.qve || 0);
+    const outflows = combined.map(h => h.q_x || 0);
     const allFlows = [...inflows, ...outflows];
     const minF = Math.min(...allFlows);
     const maxF = Math.max(...allFlows);
@@ -564,19 +659,46 @@ export default function Dashboard() {
     const yMax = maxF + fRange * 0.1;
     const yRange = yMax - yMin;
 
-    const points = history.map((pt, idx) => {
-      const x = paddingLeft + (idx / (history.length - 1)) * (width - paddingLeft - paddingRight);
+    const points = combined.map((pt, idx) => {
+      const x = paddingLeft + (idx / (combined.length - 1)) * (width - paddingLeft - paddingRight);
       const yOutflow = height - paddingBottom - (((pt.q_x || 0) - yMin) / yRange) * (height - paddingTop - paddingBottom);
       const yInflow = height - paddingBottom - (((pt.qve || 0) - yMin) / yRange) * (height - paddingTop - paddingBottom);
-      return { x, yOutflow, yInflow, q_x: pt.q_x || 0, qve: pt.qve || 0, time: pt.timestamp };
+      return { 
+        x, 
+        yOutflow, 
+        yInflow, 
+        q_x: pt.q_x || 0, 
+        qve: pt.qve || 0, 
+        time: pt.timestamp, 
+        isForecast: pt.isForecast,
+        ncxs: pt.ncxs || 0,
+        ncxm: pt.ncxm || 0
+      };
     });
 
-    // Outflow SVG path
-    const outflowLinePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yOutflow}`).join(' ');
-    const outflowAreaPath = `${outflowLinePath} L ${points[points.length - 1].x} ${height - paddingBottom} L ${points[0].x} ${height - paddingBottom} Z`;
+    const historyPoints = points.filter(p => !p.isForecast);
+    const forecastPoints = points.filter(p => p.isForecast);
 
-    // Inflow SVG path
-    const inflowLinePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yInflow}`).join(' ');
+    let histOutflowLine = "";
+    let histOutflowArea = "";
+    let histInflowLine = "";
+    if (historyPoints.length > 0) {
+      histOutflowLine = historyPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yOutflow}`).join(' ');
+      histOutflowArea = `${histOutflowLine} L ${historyPoints[historyPoints.length - 1].x} ${height - paddingBottom} L ${historyPoints[0].x} ${height - paddingBottom} Z`;
+      histInflowLine = historyPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yInflow}`).join(' ');
+    }
+
+    let foreOutflowLine = "";
+    let foreOutflowArea = "";
+    let foreInflowLine = "";
+    if (forecastPoints.length > 0) {
+      const startPoint = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1] : forecastPoints[0];
+      foreOutflowLine = `M ${startPoint.x} ${startPoint.yOutflow} ` + forecastPoints.map(p => `L ${p.x} ${p.yOutflow}`).join(' ');
+      foreOutflowArea = `${foreOutflowLine} L ${forecastPoints[forecastPoints.length - 1].x} ${height - paddingBottom} L ${startPoint.x} ${height - paddingBottom} Z`;
+      foreInflowLine = `M ${startPoint.x} ${startPoint.yInflow} ` + forecastPoints.map(p => `L ${p.x} ${p.yInflow}`).join(' ');
+    }
+
+    const nowX = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].x : paddingLeft;
 
     return {
       width,
@@ -586,13 +708,17 @@ export default function Dashboard() {
       paddingTop,
       paddingBottom,
       points,
-      outflowLinePath,
-      outflowAreaPath,
-      inflowLinePath,
+      histOutflowLine,
+      histOutflowArea,
+      histInflowLine,
+      foreOutflowLine,
+      foreOutflowArea,
+      foreInflowLine,
+      nowX,
       yMin: Math.round(yMin),
-      yMax: Math.round(yMax),
+      yMax: Math.round(yMax)
     };
-  }, [history, selectedReservoir]);
+  }, [history, forecastData, selectedReservoir]);
 
   // Estimate current reservoir storage volume and available flood control slice
   const capacityInfo = useMemo(() => {
@@ -774,11 +900,29 @@ export default function Dashboard() {
     const points = historyData.map((pt, idx) => {
       const x = paddingLeft + (idx / (historyData.length - 1)) * (width - paddingLeft - paddingRight);
       const y = height - paddingBottom - ((pt.htl - yMin) / yRange) * (height - paddingTop - paddingBottom);
-      return { x, y, htl: pt.htl, time: pt.timestamp };
+      return { x, y, htl: pt.htl, time: pt.timestamp, isForecast: pt.isForecast, ncxs: pt.ncxs, ncxm: pt.ncxm };
     });
 
-    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - paddingBottom} L ${points[0].x} ${height - paddingBottom} Z`;
+    const historyPoints = points.filter(p => !p.isForecast);
+    const forecastPoints = points.filter(p => p.isForecast);
+
+    let historyLinePath = "";
+    let historyAreaPath = "";
+    if (historyPoints.length > 0) {
+      historyLinePath = historyPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+      const lastHist = historyPoints[historyPoints.length - 1];
+      historyAreaPath = `${historyLinePath} L ${lastHist.x} ${height - paddingBottom} L ${historyPoints[0].x} ${height - paddingBottom} Z`;
+    }
+
+    let forecastLinePath = "";
+    let forecastAreaPath = "";
+    if (forecastPoints.length > 0) {
+      const startPoint = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1] : forecastPoints[0];
+      forecastLinePath = `M ${startPoint.x} ${startPoint.y} ` + forecastPoints.map(p => `L ${p.x} ${p.y}`).join(' ');
+      forecastAreaPath = `${forecastLinePath} L ${forecastPoints[forecastPoints.length - 1].x} ${height - paddingBottom} L ${startPoint.x} ${height - paddingBottom} Z`;
+    }
+
+    const nowX = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].x : paddingLeft;
 
     const hControl = meta.hControl || meta.hdbt;
     let hControlY = null;
@@ -794,8 +938,11 @@ export default function Dashboard() {
       paddingTop,
       paddingBottom,
       points,
-      linePath,
-      areaPath,
+      historyLinePath,
+      historyAreaPath,
+      forecastLinePath,
+      forecastAreaPath,
+      nowX,
       yMin: yMin.toFixed(1),
       yMax: yMax.toFixed(1),
       hControlY
@@ -828,12 +975,40 @@ export default function Dashboard() {
       const x = paddingLeft + (idx / (historyData.length - 1)) * (width - paddingLeft - paddingRight);
       const yOutflow = height - paddingBottom - (((pt.q_x || 0) - yMin) / yRange) * (height - paddingTop - paddingBottom);
       const yInflow = height - paddingBottom - (((pt.qve || 0) - yMin) / yRange) * (height - paddingTop - paddingBottom);
-      return { x, yOutflow, yInflow, q_x: pt.q_x || 0, qve: pt.qve || 0, time: pt.timestamp };
+      return { 
+        x, 
+        yOutflow, 
+        yInflow, 
+        q_x: pt.q_x || 0, 
+        qve: pt.qve || 0, 
+        time: pt.timestamp, 
+        isForecast: pt.isForecast 
+      };
     });
 
-    const outflowLinePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yOutflow}`).join(' ');
-    const outflowAreaPath = `${outflowLinePath} L ${points[points.length - 1].x} ${height - paddingBottom} L ${points[0].x} ${height - paddingBottom} Z`;
-    const inflowLinePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yInflow}`).join(' ');
+    const historyPoints = points.filter(p => !p.isForecast);
+    const forecastPoints = points.filter(p => p.isForecast);
+
+    let histOutflowLine = "";
+    let histOutflowArea = "";
+    let histInflowLine = "";
+    if (historyPoints.length > 0) {
+      histOutflowLine = historyPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yOutflow}`).join(' ');
+      histOutflowArea = `${histOutflowLine} L ${historyPoints[historyPoints.length - 1].x} ${height - paddingBottom} L ${historyPoints[0].x} ${height - paddingBottom} Z`;
+      histInflowLine = historyPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.yInflow}`).join(' ');
+    }
+
+    let foreOutflowLine = "";
+    let foreOutflowArea = "";
+    let foreInflowLine = "";
+    if (forecastPoints.length > 0) {
+      const startPoint = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1] : forecastPoints[0];
+      foreOutflowLine = `M ${startPoint.x} ${startPoint.yOutflow} ` + forecastPoints.map(p => `L ${p.x} ${p.yOutflow}`).join(' ');
+      foreOutflowArea = `${foreOutflowLine} L ${forecastPoints[forecastPoints.length - 1].x} ${height - paddingBottom} L ${startPoint.x} ${height - paddingBottom} Z`;
+      foreInflowLine = `M ${startPoint.x} ${startPoint.yInflow} ` + forecastPoints.map(p => `L ${p.x} ${p.yInflow}`).join(' ');
+    }
+
+    const nowX = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].x : paddingLeft;
 
     return {
       width,
@@ -843,9 +1018,13 @@ export default function Dashboard() {
       paddingTop,
       paddingBottom,
       points,
-      outflowLinePath,
-      outflowAreaPath,
-      inflowLinePath,
+      histOutflowLine,
+      histOutflowArea,
+      histInflowLine,
+      foreOutflowLine,
+      foreOutflowArea,
+      foreInflowLine,
+      nowX,
       yMin: Math.round(yMin),
       yMax: Math.round(yMax),
     };
@@ -1377,6 +1556,55 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {/* Cascade Forecast controls */}
+          <div className="glass-panel" style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center', border: '1px solid rgba(14, 165, 233, 0.15)', background: 'rgba(14, 165, 233, 0.02)' }}>
+            <span style={{ fontSize: '12px', color: 'var(--color-primary)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              🔮 Dự báo tương lai bậc thang:
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Kịch bản:</span>
+              <select 
+                value={forecastScenario} 
+                onChange={(e) => setForecastScenario(e.target.value as any)}
+                className="input-control font-sans"
+                style={{ width: '250px', fontSize: '12px', cursor: 'pointer', padding: '4px 8px', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-color)', color: '#fff', borderRadius: '4px' }}
+              >
+                <option value="constant">Dòng chảy không đổi (Constant Baseline)</option>
+                <option value="flood">Mưa lũ lớn toàn lưu vực (Full Basin Flood)</option>
+                <option value="flood_sonla">Mưa lớn cục bộ tại Sơn La</option>
+                <option value="flood_hoabinh">Mưa lớn cục bộ tại Hòa Bình</option>
+                <option value="dry">Khô hạn / Thiếu nước (Dry Spell)</option>
+              </select>
+            </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Thời gian dự báo:</span>
+              <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '11px' }}>
+                {(['3d', '7d', '30d'] as const).map((r) => {
+                  const labels: Record<string, string> = { '3d': '3 ngày', '7d': '7 ngày', '30d': '1 tháng' };
+                  return (
+                    <button
+                      key={r}
+                      onClick={() => handleForecastRangeChange(r)}
+                      style={{
+                        background: forecastRange === r ? 'var(--color-primary)' : 'none',
+                        color: forecastRange === r ? '#000' : 'var(--text-secondary)',
+                        border: 'none',
+                        padding: '4px 10px',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        fontWeight: forecastRange === r ? '600' : 'normal',
+                      }}
+                    >
+                      {labels[r]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           <div style={{ color: 'var(--text-secondary)', fontSize: '13px', maxWidth: '800px', lineHeight: '1.4', marginBottom: '12px' }}>
             {CASCADES[selectedCascade].description}
           </div>
@@ -1447,6 +1675,9 @@ export default function Dashboard() {
               {CASCADES[selectedCascade].reservoirs.map((name, index) => {
                 const item = waterLevels.find(w => w.name === name);
                 if (!item) return null;
+
+                const histText = historyRange === "3d" ? "3 ngày" : historyRange === "7d" ? "7 ngày" : historyRange === "15d" ? "15 ngày" : historyRange === "30d" ? "30 ngày" : "1 năm";
+                const foreText = forecastRange === "3d" ? "3 ngày" : forecastRange === "7d" ? "7 ngày" : "1 tháng";
 
                 // Find history data
                 const historyData = cascadeHistory[name] || [];
@@ -1609,6 +1840,54 @@ export default function Dashboard() {
                                 )}
                               </div>
                             )}
+
+                            {/* Forecast gate operations badge in cascade card */}
+                            {(() => {
+                              const forecastPts = (cascadeHistory[name] || []).filter(p => p.isForecast);
+                              const initialPt = (cascadeHistory[name] || []).find(p => !p.isForecast);
+                              const initNcxs = initialPt ? (initialPt.ncxs || 0) : 0;
+                              const maxDeepF = Math.max(0, ...forecastPts.map(p => p.ncxs || 0));
+                              const maxSurfaceF = Math.max(0, ...forecastPts.map(p => p.ncxm || 0));
+                              const maxQxtF = Math.max(0, ...forecastPts.map(p => p.qxt || 0));
+                              if (maxQxtF === 0) return null;
+
+                              const isNewGateOpened = maxDeepF > initNcxs;
+                              const isConstantMode = forecastScenario === 'constant';
+
+                              if (isConstantMode || !isNewGateOpened) {
+                                return (
+                                  <div style={{ marginTop: '8px', padding: '6px 8px', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)', fontSize: '10px', lineHeight: '1.3' }}>
+                                    <span style={{ color: 'var(--text-secondary)', display: 'block' }}>
+                                      🔄 Duy trì xả hiện tại: <strong>{maxDeepF} cửa xả sâu</strong> ({maxQxtF.toLocaleString()} m³/s)
+                                    </span>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div style={{ 
+                                  marginTop: '8px', 
+                                  padding: '6px 8px', 
+                                  borderRadius: '6px', 
+                                  background: 'rgba(14, 165, 233, 0.08)', 
+                                  border: '1px solid rgba(14, 165, 233, 0.25)', 
+                                  fontSize: '10px',
+                                  lineHeight: '1.3'
+                                }}>
+                                  <span style={{ fontWeight: '600', color: 'var(--color-info)', display: 'block', marginBottom: '2px' }}>
+                                    🔮 Dự báo mở thêm xả lũ:
+                                  </span>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
+                                    <span>Cửa mở tối đa:</span>
+                                    <strong style={{ color: 'var(--color-info)' }}>{maxDeepF} sâu {maxSurfaceF > 0 ? `/ ${maxSurfaceF} mặt` : ''}</strong>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                    <span>Qxt max:</span>
+                                    <strong style={{ color: 'var(--color-info)' }}>{maxQxtF.toLocaleString()} m³/s</strong>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1618,7 +1897,7 @@ export default function Dashboard() {
                         {/* Mini-Chart 1: Water Level */}
                         <div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                            <span>Mực nước ({historyRange === "3d" ? "72h" : historyRange === "7d" ? "7 ngày" : historyRange === "15d" ? "15 ngày" : "Lịch sử"})</span>
+                            <span>Mực nước (Lịch sử {histText} + Dự báo {foreText})</span>
                             <span>Mét (m)</span>
                           </div>
                           
@@ -1633,8 +1912,25 @@ export default function Dashboard() {
                                 <text x={miniChart.paddingLeft - 4} y={miniChart.paddingTop + 4} fill="var(--text-muted)" fontSize="8" textAnchor="end">{miniChart.yMax}m</text>
                                 <text x={miniChart.paddingLeft - 4} y={miniChart.height - miniChart.paddingBottom + 3} fill="var(--text-muted)" fontSize="8" textAnchor="end">{miniChart.yMin}m</text>
                                 
-                                <path d={miniChart.areaPath} fill="rgba(14, 165, 233, 0.05)" />
-                                <path d={miniChart.linePath} fill="none" stroke="var(--color-primary)" strokeWidth="1.5" />
+                                {miniChart.historyAreaPath && <path d={miniChart.historyAreaPath} fill="rgba(14, 165, 233, 0.05)" />}
+                                {miniChart.forecastAreaPath && <path d={miniChart.forecastAreaPath} fill="rgba(14, 165, 233, 0.02)" />}
+
+                                {/* Highlight Future Zone */}
+                                {miniChart.nowX < miniChart.width - miniChart.paddingRight && (
+                                  <rect
+                                    x={miniChart.nowX}
+                                    y={miniChart.paddingTop}
+                                    width={miniChart.width - miniChart.paddingRight - miniChart.nowX}
+                                    height={miniChart.height - miniChart.paddingTop - miniChart.paddingBottom}
+                                    fill="rgba(14, 165, 233, 0.02)"
+                                  />
+                                )}
+                                
+                                {miniChart.historyLinePath && <path d={miniChart.historyLinePath} fill="none" stroke="var(--color-primary)" strokeWidth="1.5" />}
+                                {miniChart.forecastLinePath && <path d={miniChart.forecastLinePath} fill="none" stroke="var(--color-info)" strokeWidth="1.5" strokeDasharray="2 2" />}
+
+                                {/* Separator */}
+                                <line x1={miniChart.nowX} y1={miniChart.paddingTop} x2={miniChart.nowX} y2={miniChart.height - miniChart.paddingBottom} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="1 1" />
 
                                 {miniChart.hControlY !== null && (
                                   <line x1={miniChart.paddingLeft} y1={miniChart.hControlY} x2={miniChart.width - miniChart.paddingRight} y2={miniChart.hControlY} stroke="var(--color-warning)" strokeWidth="1" strokeDasharray="3 3" />
@@ -1643,36 +1939,35 @@ export default function Dashboard() {
                                 {/* Hover vertical line & tooltip */}
                                 {cascadeHoverIndex !== null && cascadeHoverIndex < miniChart.points.length && (() => {
                                   const p = miniChart.points[cascadeHoverIndex];
+                                  const hasGates = (p.ncxs || 0) > 0 || (p.ncxm || 0) > 0;
                                   return (
                                     <g key="hover-group">
-                                      {/* Vertical Line */}
                                       <line
                                         x1={p.x}
                                         y1={miniChart.paddingTop}
                                         x2={p.x}
                                         y2={miniChart.height - miniChart.paddingBottom}
-                                        stroke="rgba(255,255,255,0.15)"
+                                        stroke={p.isForecast ? "var(--color-info)" : "var(--color-primary)"}
                                         strokeDasharray="2 2"
                                       />
-                                      {/* Tooltip point */}
                                       <circle
                                         cx={p.x}
                                         cy={p.y}
                                         r="3.5"
-                                        fill="var(--color-primary)"
+                                        fill={p.isForecast ? "var(--color-info)" : "var(--color-primary)"}
                                         stroke="#1e293b"
                                         strokeWidth="1"
                                       />
                                       {/* Tooltip value */}
                                       <text
-                                        x={Math.max(miniChart.paddingLeft + 35, Math.min(p.x, miniChart.width - miniChart.paddingRight - 35))}
-                                        y={Math.max(20, p.y - 10)}
+                                        x={Math.max(miniChart.paddingLeft + 45, Math.min(p.x, miniChart.width - miniChart.paddingRight - 45))}
+                                        y={Math.max(16, p.y - 10)}
                                         fill="var(--text-primary)"
-                                        fontSize="9"
+                                        fontSize="8"
                                         fontWeight="700"
                                         textAnchor="middle"
                                       >
-                                        {p.htl.toFixed(2)} m
+                                        {p.isForecast ? "🔮 " : ""}{p.htl.toFixed(2)} m
                                       </text>
                                     </g>
                                   );
@@ -1697,7 +1992,7 @@ export default function Dashboard() {
                         {/* Mini-Chart 2: Flow Rates */}
                         <div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                            <span>Lưu lượng (m³/s)</span>
+                            <span>Lưu lượng (Lịch sử {histText} + Dự báo {foreText})</span>
                             <span style={{ color: 'var(--color-success)' }}>Qve (đứt)</span>
                             <span style={{ color: 'var(--color-primary)' }}>Qx (liền)</span>
                           </div>
@@ -1713,9 +2008,28 @@ export default function Dashboard() {
                                 <text x={miniFlowChart.paddingLeft - 4} y={miniFlowChart.paddingTop + 4} fill="var(--text-muted)" fontSize="8" textAnchor="end">{miniFlowChart.yMax.toLocaleString()}</text>
                                 <text x={miniFlowChart.paddingLeft - 4} y={miniFlowChart.height - miniFlowChart.paddingBottom + 3} fill="var(--text-muted)" fontSize="8" textAnchor="end">{miniFlowChart.yMin.toLocaleString()}</text>
 
-                                <path d={miniFlowChart.outflowAreaPath} fill="rgba(14, 165, 233, 0.03)" />
-                                <path d={miniFlowChart.outflowLinePath} fill="none" stroke="var(--color-primary)" strokeWidth="1.2" />
-                                <path d={miniFlowChart.inflowLinePath} fill="none" stroke="var(--color-success)" strokeWidth="1" strokeDasharray="2 2" />
+                                {miniFlowChart.histOutflowArea && <path d={miniFlowChart.histOutflowArea} fill="rgba(14, 165, 233, 0.03)" />}
+                                {miniFlowChart.foreOutflowArea && <path d={miniFlowChart.foreOutflowArea} fill="rgba(14, 165, 233, 0.015)" />}
+
+                                {/* Highlight Future Zone */}
+                                {miniFlowChart.nowX < miniFlowChart.width - miniFlowChart.paddingRight && (
+                                  <rect
+                                    x={miniFlowChart.nowX}
+                                    y={miniFlowChart.paddingTop}
+                                    width={miniFlowChart.width - miniFlowChart.paddingRight - miniFlowChart.nowX}
+                                    height={miniFlowChart.height - miniFlowChart.paddingTop - miniFlowChart.paddingBottom}
+                                    fill="rgba(14, 165, 233, 0.02)"
+                                  />
+                                )}
+                                
+                                {miniFlowChart.histOutflowLine && <path d={miniFlowChart.histOutflowLine} fill="none" stroke="var(--color-primary)" strokeWidth="1.2" />}
+                                {miniFlowChart.histInflowLine && <path d={miniFlowChart.histInflowLine} fill="none" stroke="var(--color-success)" strokeWidth="1" strokeDasharray="2 2" />}
+
+                                {miniFlowChart.foreOutflowLine && <path d={miniFlowChart.foreOutflowLine} fill="none" stroke="var(--color-primary)" strokeWidth="1.2" strokeDasharray="2 2" />}
+                                {miniFlowChart.foreInflowLine && <path d={miniFlowChart.foreInflowLine} fill="none" stroke="var(--color-success)" strokeWidth="1" strokeDasharray="1 2" />}
+
+                                {/* Separator */}
+                                <line x1={miniFlowChart.nowX} y1={miniFlowChart.paddingTop} x2={miniFlowChart.nowX} y2={miniFlowChart.height - miniFlowChart.paddingBottom} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="1 1" />
 
                                 {/* Hover vertical line & tooltip */}
                                 {cascadeHoverIndex !== null && cascadeHoverIndex < miniFlowChart.points.length && (() => {
@@ -1751,17 +2065,17 @@ export default function Dashboard() {
                                       />
                                       {/* Tooltip values */}
                                       <text
-                                        x={Math.max(miniFlowChart.paddingLeft + 45, Math.min(p.x, miniFlowChart.width - miniFlowChart.paddingRight - 45))}
-                                        y={18}
+                                        x={Math.max(miniFlowChart.paddingLeft + 55, Math.min(p.x, miniFlowChart.width - miniFlowChart.paddingRight - 55))}
+                                        y={14}
                                         fill="var(--text-primary)"
                                         fontSize="8"
                                         fontWeight="700"
                                         textAnchor="middle"
                                       >
-                                        Qve: {p.qve.toLocaleString()} | Qx: {p.q_x.toLocaleString()}
+                                        {p.isForecast ? "🔮 " : ""}Qve:{p.qve.toLocaleString()} | Qx:{p.q_x.toLocaleString()}
                                       </text>
                                       <text
-                                        x={Math.max(miniFlowChart.paddingLeft + 45, Math.min(p.x, miniFlowChart.width - miniFlowChart.paddingRight - 45))}
+                                        x={Math.max(miniFlowChart.paddingLeft + 55, Math.min(p.x, miniFlowChart.width - miniFlowChart.paddingRight - 55))}
                                         y={miniFlowChart.height - 2}
                                         fill="var(--text-muted)"
                                         fontSize="7"
@@ -2547,20 +2861,72 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Historical Trend Chart with Range Selector */}
+              {/* Integrated Future Forecast Configuration */}
+              <div className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', border: '1px solid rgba(14, 165, 233, 0.15)', background: 'rgba(14, 165, 233, 0.02)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--color-primary)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    ⚙️ Cấu hình dự báo tương lai
+                  </span>
+                  {forecastLoading && (
+                    <RefreshCw className="spin" style={{ width: '12px', height: '12px', color: 'var(--color-primary)' }} />
+                  )}
+                </div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Kịch bản thủy văn:</span>
+                  <select 
+                    value={forecastScenario} 
+                    onChange={(e) => setForecastScenario(e.target.value as any)}
+                    className="input-control font-sans"
+                    style={{ width: '100%', fontSize: '12px', cursor: 'pointer', padding: '6px' }}
+                  >
+                    <option value="constant">Dòng chảy không đổi (Constant Baseline)</option>
+                    <option value="flood">Mưa lũ lớn toàn lưu vực (Full Basin Flood)</option>
+                    <option value="flood_sonla">Mưa lớn cục bộ tại Sơn La</option>
+                    <option value="flood_hoabinh">Mưa lớn cục bộ tại Hòa Bình</option>
+                    <option value="dry">Khô hạn / Thiếu nước (Dry Spell)</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', marginTop: '4px' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>Thời gian dự báo:</span>
+                  <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
+                    {(['3d', '7d', '30d'] as const).map((r) => {
+                      const labels: Record<string, string> = { '3d': '3 ngày', '7d': '7 ngày', '30d': '1 tháng' };
+                      return (
+                        <button
+                          key={r}
+                          onClick={() => handleForecastRangeChange(r)}
+                          style={{
+                            background: forecastRange === r ? 'var(--color-primary)' : 'none',
+                            color: forecastRange === r ? '#000' : 'var(--text-secondary)',
+                            border: 'none',
+                            padding: '3px 8px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '10px',
+                            fontWeight: forecastRange === r ? '600' : 'normal',
+                          }}
+                        >
+                          {labels[r]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Combined Water Level Chart (History + Forecast) */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-                  <h4 style={{ fontSize: '13px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>Biểu đồ mực nước</h4>
+                  <h4 style={{ fontSize: '13px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+                    Mực nước (Lịch sử + Dự báo)
+                  </h4>
                   
+                  {/* History Range Selector */}
                   <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '11px' }}>
                     {(["3d", "7d", "15d", "30d", "1y"] as const).map((r) => {
-                      const labels: Record<string, string> = {
-                        "3d": "3 ngày",
-                        "7d": "7 ngày",
-                        "15d": "15 ngày",
-                        "30d": "30 ngày",
-                        "1y": "Tất cả"
-                      };
+                      const labels: Record<string, string> = { "3d": "Lịch sử 3 ngày", "7d": "7 ngày", "15d": "15 ngày", "30d": "30 ngày", "1y": "Tất cả" };
                       const isActive = historyRange === r;
                       return (
                         <button
@@ -2573,8 +2939,8 @@ export default function Dashboard() {
                             padding: '4px 8px',
                             borderRadius: '4px',
                             cursor: 'pointer',
+                            fontSize: '10px',
                             fontWeight: isActive ? '600' : 'normal',
-                            transition: 'all 0.2s ease'
                           }}
                         >
                           {labels[r]}
@@ -2585,155 +2951,144 @@ export default function Dashboard() {
                 </div>
 
                 <div className="glass-panel" style={{ padding: '12px', minHeight: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '20px' }}>
-                  {historyLoading ? (
+                  {historyLoading || forecastLoading ? (
                     <RefreshCw className="spin" style={{ width: '24px', height: '24px', color: 'var(--color-primary)' }} />
-                  ) : history.length === 0 ? (
-                    <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Không tìm thấy dữ liệu lịch sử</span>
-                  ) : chartProps ? (
-                    // Custom SVG Sparkline
+                  ) : combinedChartProps ? (
                     <div style={{ width: '100%' }}>
-                      <svg viewBox={`0 0 ${chartProps.width} ${chartProps.height}`} style={{ width: '100%', height: 'auto' }}>
+                      <svg viewBox={`0 0 ${combinedChartProps.width} ${combinedChartProps.height}`} style={{ width: '100%', height: 'auto' }}>
                         <defs>
                           <linearGradient id="chart-grad" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.25" />
                             <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0.00" />
                           </linearGradient>
+                          <linearGradient id="forecast-grad-fill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--color-info)" stopOpacity="0.25" />
+                            <stop offset="100%" stopColor="var(--color-info)" stopOpacity="0.00" />
+                          </linearGradient>
                         </defs>
                         
-                        {/* Y-Axis Grid Lines */}
-                        <line x1={chartProps.paddingLeft} y1={chartProps.paddingTop} x2={chartProps.width - chartProps.paddingRight} y2={chartProps.paddingTop} stroke="rgba(255,255,255,0.05)" strokeDasharray="3" />
-                        <line x1={chartProps.paddingLeft} y1={chartProps.height - chartProps.paddingBottom} x2={chartProps.width - chartProps.paddingRight} y2={chartProps.height - chartProps.paddingBottom} stroke="rgba(255,255,255,0.05)" />
+                        <line x1={combinedChartProps.paddingLeft} y1={combinedChartProps.paddingTop} x2={combinedChartProps.width - combinedChartProps.paddingRight} y2={combinedChartProps.paddingTop} stroke="rgba(255,255,255,0.05)" strokeDasharray="3" />
+                        <line x1={combinedChartProps.paddingLeft} y1={combinedChartProps.height - combinedChartProps.paddingBottom} x2={combinedChartProps.width - combinedChartProps.paddingRight} y2={combinedChartProps.height - combinedChartProps.paddingBottom} stroke="rgba(255,255,255,0.05)" />
                         
-                        {/* Limit line (Hcontrol) if in range */}
-                        {chartProps.hControlY !== null && (
+                        {/* Control limit line */}
+                        {combinedChartProps.hControlY !== null && (
                           <g>
-                            <line 
-                              x1={chartProps.paddingLeft} 
-                              y1={chartProps.hControlY} 
-                              x2={chartProps.width - chartProps.paddingRight} 
-                              y2={chartProps.hControlY} 
-                              stroke="var(--color-warning)" 
-                              strokeWidth="1.5" 
-                              strokeDasharray="4 4" 
-                              opacity="0.8"
-                            />
-                            <text 
-                              x={chartProps.width - chartProps.paddingRight - 4} 
-                              y={chartProps.hControlY - 4} 
-                              fill="var(--color-warning)" 
-                              fontSize="8" 
-                              fontWeight="600" 
-                              textAnchor="end"
-                            >
+                            <line x1={combinedChartProps.paddingLeft} y1={combinedChartProps.hControlY} x2={combinedChartProps.width - combinedChartProps.paddingRight} y2={combinedChartProps.hControlY} stroke="var(--color-warning)" strokeWidth="1.5" strokeDasharray="4 4" opacity="0.8" />
+                            <text x={combinedChartProps.width - combinedChartProps.paddingRight - 4} y={combinedChartProps.hControlY - 4} fill="var(--color-warning)" fontSize="8" fontWeight="600" textAnchor="end">
                               Giới hạn lũ ({selectedReservoir.hControl.toFixed(1)}m)
                             </text>
                           </g>
                         )}
 
-                        {/* Y Labels */}
-                        <text x={chartProps.paddingLeft - 8} y={chartProps.paddingTop + 4} fill="var(--text-muted)" fontSize="10" textAnchor="end">{chartProps.yMax}m</text>
-                        <text x={chartProps.paddingLeft - 8} y={chartProps.height - chartProps.paddingBottom + 3} fill="var(--text-muted)" fontSize="10" textAnchor="end">{chartProps.yMin}m</text>
+                        <text x={combinedChartProps.paddingLeft - 8} y={combinedChartProps.paddingTop + 4} fill="var(--text-muted)" fontSize="10" textAnchor="end">{combinedChartProps.yMax}m</text>
+                        <text x={combinedChartProps.paddingLeft - 8} y={combinedChartProps.height - combinedChartProps.paddingBottom + 3} fill="var(--text-muted)" fontSize="10" textAnchor="end">{combinedChartProps.yMin}m</text>
 
-                        {/* Chart Area Gradient Fill */}
-                        <path d={chartProps.areaPath} fill="url(#chart-grad)" />
+                        {/* Combined Area Fills */}
+                        {combinedChartProps.historyAreaPath && <path d={combinedChartProps.historyAreaPath} fill="url(#chart-grad)" />}
+                        {combinedChartProps.forecastAreaPath && <path d={combinedChartProps.forecastAreaPath} fill="url(#forecast-grad-fill)" />}
 
-                        {/* Chart Stroke Line */}
-                        <path d={chartProps.linePath} fill="none" stroke="var(--color-primary)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-
-                        {/* Data point indicators */}
-                        {chartProps.points.map((p, i) => {
-                          // Show dots only on endpoints or every few points for readability
-                          const shouldDrawDot = i === 0 || i === chartProps.points.length - 1 || (i % 6 === 0);
-                          if (!shouldDrawDot) return null;
-                          return (
-                            <g key={i}>
-                              <circle cx={p.x} cy={p.y} r="3" fill="var(--bg-surface-solid)" stroke="var(--color-primary)" strokeWidth="1.5" />
-                            </g>
-                          );
-                        })}
-
-                        {/* Date X Labels (First and last) */}
-                        {chartProps.points.length > 0 && (
-                          <>
-                            <text x={chartProps.paddingLeft} y={chartProps.height - 8} fill="var(--text-muted)" fontSize="9" textAnchor="start">
-                              {new Date(chartProps.points[0].time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})} {new Date(chartProps.points[0].time).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}
+                        {/* Highlight Future Zone */}
+                        {combinedChartProps.nowX < combinedChartProps.width - combinedChartProps.paddingRight && (
+                          <g>
+                            <rect
+                              x={combinedChartProps.nowX}
+                              y={combinedChartProps.paddingTop}
+                              width={combinedChartProps.width - combinedChartProps.paddingRight - combinedChartProps.nowX}
+                              height={combinedChartProps.height - combinedChartProps.paddingTop - combinedChartProps.paddingBottom}
+                              fill="rgba(14, 165, 233, 0.02)"
+                            />
+                            <text
+                              x={combinedChartProps.nowX + 6}
+                              y={combinedChartProps.paddingTop + 10}
+                              fill="var(--color-info)"
+                              fontSize="7"
+                              fontWeight="600"
+                              opacity="0.6"
+                            >
+                              VÙNG DỰ BÁO 🔮
                             </text>
-                            <text x={chartProps.width - chartProps.paddingRight} y={chartProps.height - 8} fill="var(--text-muted)" fontSize="9" textAnchor="end">
-                              {new Date(chartProps.points[chartProps.points.length-1].time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})} {new Date(chartProps.points[chartProps.points.length-1].time).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}
+                          </g>
+                        )}
+
+                        {/* Combined Stroke Lines */}
+                        {combinedChartProps.historyLinePath && <path d={combinedChartProps.historyLinePath} fill="none" stroke="var(--color-primary)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />}
+                        {combinedChartProps.forecastLinePath && <path d={combinedChartProps.forecastLinePath} fill="none" stroke="var(--color-info)" strokeWidth="2.5" strokeDasharray="3 3" strokeLinecap="round" strokeLinejoin="round" />}
+
+                        {/* "Now" separator vertical line */}
+                        <line x1={combinedChartProps.nowX} y1={combinedChartProps.paddingTop} x2={combinedChartProps.nowX} y2={combinedChartProps.height - combinedChartProps.paddingBottom} stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 2" />
+                        <text x={combinedChartProps.nowX} y={combinedChartProps.paddingTop - 4} fill="var(--text-secondary)" fontSize="8" fontWeight="600" textAnchor="middle">Hiện tại (Now)</text>
+
+                        {/* Date X Labels (First, now, and last) */}
+                        {combinedChartProps.points.length > 0 && (
+                          <>
+                            <text x={combinedChartProps.paddingLeft} y={combinedChartProps.height - 8} fill="var(--text-muted)" fontSize="8" textAnchor="start">
+                              {new Date(combinedChartProps.points[0].time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})}
+                            </text>
+                            <text x={combinedChartProps.width - combinedChartProps.paddingRight} y={combinedChartProps.height - 8} fill="var(--text-muted)" fontSize="8" textAnchor="end">
+                              Dự báo cuối
                             </text>
                           </>
                         )}
 
-                        {/* Synchronized Hover elements */}
-                        {hoveredIndex !== null && chartProps.points[hoveredIndex] && (() => {
-                          const p = chartProps.points[hoveredIndex];
+                        {/* Synchronized Hover tooltip */}
+                        {forecastHoverIndex !== null && combinedChartProps.points[forecastHoverIndex] && (() => {
+                          const p = combinedChartProps.points[forecastHoverIndex];
+                          const hasGates = p.isForecast && (forecastData[forecastHoverIndex - history.length]?.ncxs || forecastData[forecastHoverIndex - history.length]?.ncxm);
+                          const gateData = p.isForecast ? forecastData[forecastHoverIndex - history.length] : null;
                           return (
                             <g pointerEvents="none">
-                              {/* Vertical tracking dashed line */}
-                              <line 
-                                x1={p.x} 
-                                y1={chartProps.paddingTop} 
-                                x2={p.x} 
-                                y2={chartProps.height - chartProps.paddingBottom} 
-                                stroke="var(--color-primary)" 
-                                strokeWidth="1" 
-                                strokeDasharray="3" 
-                              />
-                              {/* Highlight circle on data point */}
-                              <circle 
-                                cx={p.x} 
-                                cy={p.y} 
-                                r="5" 
-                                fill="var(--color-primary)" 
-                                stroke="var(--bg-surface-solid)" 
-                                strokeWidth="2" 
-                              />
-                              {/* Tooltip Card */}
+                              <line x1={p.x} y1={combinedChartProps.paddingTop} x2={p.x} y2={combinedChartProps.height - combinedChartProps.paddingBottom} stroke={p.isForecast ? "var(--color-info)" : "var(--color-primary)"} strokeWidth="1" strokeDasharray="3" />
+                              <circle cx={p.x} cy={p.y} r="5" fill={p.isForecast ? "var(--color-info)" : "var(--color-primary)"} stroke="#0f172a" strokeWidth="2" />
                               <rect
-                                x={Math.max(chartProps.paddingLeft, Math.min(p.x - 70, chartProps.width - chartProps.paddingRight - 140))}
-                                y={Math.max(5, p.y - 45)}
-                                width="140"
-                                height="35"
+                                x={Math.max(combinedChartProps.paddingLeft, Math.min(p.x - 75, combinedChartProps.width - combinedChartProps.paddingRight - 150))}
+                                y={Math.max(5, p.y - (hasGates ? 56 : 45))}
+                                width="150"
+                                height={hasGates ? 46 : 35}
                                 rx="6"
                                 fill="rgba(15, 23, 42, 0.95)"
                                 stroke="rgba(14, 165, 233, 0.2)"
                                 strokeWidth="1"
                               />
-                              {/* Tooltip Time */}
-                              <text
-                                x={Math.max(chartProps.paddingLeft + 70, Math.min(p.x, chartProps.width - chartProps.paddingRight - 70))}
-                                y={Math.max(16, p.y - 34)}
-                                fill="var(--text-muted)"
-                                fontSize="8"
-                                fontWeight="500"
-                                textAnchor="middle"
-                              >
-                                {new Date(p.time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})} {new Date(p.time).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}
+                              <text x={Math.max(combinedChartProps.paddingLeft + 75, Math.min(p.x, combinedChartProps.width - combinedChartProps.paddingRight - 75))} y={Math.max(16, p.y - (hasGates ? 45 : 34))} fill="var(--text-muted)" fontSize="8" fontWeight="500" textAnchor="middle">
+                                {p.isForecast ? "🔮 DỰ BÁO" : "📈 THỰC TẾ"}: {new Date(p.time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})} {new Date(p.time).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}
                               </text>
-                              {/* Tooltip Value */}
-                              <text
-                                x={Math.max(chartProps.paddingLeft + 70, Math.min(p.x, chartProps.width - chartProps.paddingRight - 70))}
-                                y={Math.max(28, p.y - 22)}
-                                fill="var(--color-primary)"
-                                fontSize="10"
-                                fontWeight="700"
-                                textAnchor="middle"
-                              >
+                              <text x={Math.max(combinedChartProps.paddingLeft + 75, Math.min(p.x, combinedChartProps.width - combinedChartProps.paddingRight - 75))} y={Math.max(28, p.y - (hasGates ? 33 : 22))} fill={p.isForecast ? "var(--color-info)" : "var(--color-primary)"} fontSize="10" fontWeight="700" textAnchor="middle">
                                 Htl: {p.htl.toFixed(2)} m
                               </text>
+                              {hasGates && gateData ? (
+                                <text x={Math.max(combinedChartProps.paddingLeft + 75, Math.min(p.x, combinedChartProps.width - combinedChartProps.paddingRight - 75))} y={Math.max(40, p.y - 21)} fill="var(--color-danger)" fontSize="8" fontWeight="600" textAnchor="middle">
+                                  Cửa mở: {gateData.ncxs || 0} sâu / {gateData.ncxm || 0} mặt
+                                </text>
+                              ) : null}
                             </g>
                           );
                         })()}
 
-                        {/* Interactive overlay target */}
                         <rect
-                          x={chartProps.paddingLeft}
-                          y={chartProps.paddingTop}
-                          width={chartProps.width - chartProps.paddingLeft - chartProps.paddingRight}
-                          height={chartProps.height - chartProps.paddingTop - chartProps.paddingBottom}
+                          x={combinedChartProps.paddingLeft}
+                          y={combinedChartProps.paddingTop}
+                          width={combinedChartProps.width - combinedChartProps.paddingLeft - combinedChartProps.paddingRight}
+                          height={combinedChartProps.height - combinedChartProps.paddingTop - combinedChartProps.paddingBottom}
                           fill="transparent"
-                          onMouseMove={(e) => handleChartMouseMove(e, chartProps.width)}
-                          onMouseLeave={handleChartMouseLeave}
+                          onMouseMove={(e) => {
+                            if (combinedChartProps.points.length === 0) return;
+                            const svg = e.currentTarget.ownerSVGElement;
+                            if (!svg) return;
+                            const rect = svg.getBoundingClientRect();
+                            const mouseX = ((e.clientX - rect.left) / rect.width) * combinedChartProps.width;
+                            let closest = 0;
+                            let minD = Infinity;
+                            for (let i = 0; i < combinedChartProps.points.length; i++) {
+                              const ptX = combinedChartProps.paddingLeft + (i / (combinedChartProps.points.length - 1)) * (combinedChartProps.width - combinedChartProps.paddingLeft - combinedChartProps.paddingRight);
+                              const diff = Math.abs(ptX - mouseX);
+                              if (diff < minD) {
+                                minD = diff;
+                                closest = i;
+                              }
+                            }
+                            setForecastHoverIndex(closest);
+                          }}
+                          onMouseLeave={() => setForecastHoverIndex(null)}
                           style={{ cursor: 'crosshair' }}
                         />
                       </svg>
@@ -2742,139 +3097,138 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Dynamic Flow Rates (Discharge & Inflow) Chart */}
+              {/* Combined Flow Rates Chart (History + Forecast) */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <h4 style={{ fontSize: '13px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>Lưu lượng Xả & Về (m³/s)</h4>
-                  <div style={{ display: 'flex', gap: '8px', fontSize: '10px' }}>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--color-primary)' }}>
-                      <span style={{ display: 'inline-block', width: '8px', height: '8px', background: 'var(--color-primary)', borderRadius: '50%' }} /> Xả (Qx)
+                  <h4 style={{ fontSize: '13px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+                    Lưu lượng Xả & Về (Lịch sử + Dự báo)
+                  </h4>
+                  <div style={{ display: 'flex', gap: '8px', fontSize: '9px' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--color-primary)' }}>
+                      <span style={{ display: 'inline-block', width: '6px', height: '6px', background: 'var(--color-primary)', borderRadius: '50%' }} /> Qx xả
                     </span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--color-success)' }}>
-                      <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1px dashed var(--color-success)', borderRadius: '50%' }} /> Về (Qve)
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: 'var(--color-success)' }}>
+                      <span style={{ display: 'inline-block', width: '6px', height: '6px', border: '1px dashed var(--color-success)', borderRadius: '50%' }} /> Qve về
                     </span>
                   </div>
                 </div>
 
                 <div className="glass-panel" style={{ padding: '12px', minHeight: '170px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {historyLoading ? (
+                  {historyLoading || forecastLoading ? (
                     <RefreshCw className="spin" style={{ width: '24px', height: '24px', color: 'var(--color-primary)' }} />
-                  ) : history.length === 0 ? (
-                    <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Không tìm thấy dữ liệu lịch sử</span>
-                  ) : flowChartProps ? (
+                  ) : combinedFlowChartProps ? (
                     <div style={{ width: '100%' }}>
-                      <svg viewBox={`0 0 ${flowChartProps.width} ${flowChartProps.height}`} style={{ width: '100%', height: 'auto' }}>
+                      <svg viewBox={`0 0 ${combinedFlowChartProps.width} ${combinedFlowChartProps.height}`} style={{ width: '100%', height: 'auto' }}>
                         <defs>
-                          <linearGradient id="flow-grad" x1="0" y1="0" x2="0" y2="1">
+                          <linearGradient id="flow-grad-combined" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.2" />
                             <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0.00" />
                           </linearGradient>
                         </defs>
 
-                        {/* Y-Axis Grid Lines */}
-                        <line x1={flowChartProps.paddingLeft} y1={flowChartProps.paddingTop} x2={flowChartProps.width - flowChartProps.paddingRight} y2={flowChartProps.paddingTop} stroke="rgba(255,255,255,0.05)" strokeDasharray="3" />
-                        <line x1={flowChartProps.paddingLeft} y1={flowChartProps.height - flowChartProps.paddingBottom} x2={flowChartProps.width - flowChartProps.paddingRight} y2={flowChartProps.height - flowChartProps.paddingBottom} stroke="rgba(255,255,255,0.05)" />
+                        <line x1={combinedFlowChartProps.paddingLeft} y1={combinedFlowChartProps.paddingTop} x2={combinedFlowChartProps.width - combinedFlowChartProps.paddingRight} y2={combinedFlowChartProps.paddingTop} stroke="rgba(255,255,255,0.05)" strokeDasharray="3" />
+                        <line x1={combinedFlowChartProps.paddingLeft} y1={combinedFlowChartProps.height - combinedFlowChartProps.paddingBottom} x2={combinedFlowChartProps.width - combinedFlowChartProps.paddingRight} y2={combinedFlowChartProps.height - combinedFlowChartProps.paddingBottom} stroke="rgba(255,255,255,0.05)" />
 
-                        {/* Y Labels */}
-                        <text x={flowChartProps.paddingLeft - 8} y={flowChartProps.paddingTop + 4} fill="var(--text-muted)" fontSize="9" textAnchor="end">{flowChartProps.yMax.toLocaleString()}</text>
-                        <text x={flowChartProps.paddingLeft - 8} y={flowChartProps.height - flowChartProps.paddingBottom + 3} fill="var(--text-muted)" fontSize="9" textAnchor="end">{flowChartProps.yMin.toLocaleString()}</text>
+                        <text x={combinedFlowChartProps.paddingLeft - 8} y={combinedFlowChartProps.paddingTop + 4} fill="var(--text-muted)" fontSize="9" textAnchor="end">{combinedFlowChartProps.yMax.toLocaleString()}</text>
+                        <text x={combinedFlowChartProps.paddingLeft - 8} y={combinedFlowChartProps.height - combinedFlowChartProps.paddingBottom + 3} fill="var(--text-muted)" fontSize="9" textAnchor="end">{combinedFlowChartProps.yMin.toLocaleString()}</text>
 
-                        {/* Outflow Area Fill */}
-                        <path d={flowChartProps.outflowAreaPath} fill="url(#flow-grad)" />
+                        {/* Fills */}
+                        {combinedFlowChartProps.histOutflowArea && <path d={combinedFlowChartProps.histOutflowArea} fill="url(#flow-grad-combined)" />}
+                        {combinedFlowChartProps.foreOutflowArea && <path d={combinedFlowChartProps.foreOutflowArea} fill="url(#flow-grad-combined)" opacity="0.5" />}
 
-                        {/* Outflow Stroke Line (Qx) */}
-                        <path d={flowChartProps.outflowLinePath} fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-
-                        {/* Inflow Stroke Line (Qve) */}
-                        <path d={flowChartProps.inflowLinePath} fill="none" stroke="var(--color-success)" strokeWidth="1.5" strokeDasharray="3 3" strokeLinecap="round" strokeLinejoin="round" />
-
-                        {/* Date X Labels (First and last) */}
-                        {flowChartProps.points.length > 0 && (
-                          <>
-                            <text x={flowChartProps.paddingLeft} y={flowChartProps.height - 8} fill="var(--text-muted)" fontSize="9" textAnchor="start">
-                              {new Date(flowChartProps.points[0].time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})} {new Date(flowChartProps.points[0].time).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}
+                        {/* Highlight Future Zone */}
+                        {combinedFlowChartProps.nowX < combinedFlowChartProps.width - combinedFlowChartProps.paddingRight && (
+                          <g>
+                            <rect
+                              x={combinedFlowChartProps.nowX}
+                              y={combinedFlowChartProps.paddingTop}
+                              width={combinedFlowChartProps.width - combinedFlowChartProps.paddingRight - combinedFlowChartProps.nowX}
+                              height={combinedFlowChartProps.height - combinedFlowChartProps.paddingTop - combinedFlowChartProps.paddingBottom}
+                              fill="rgba(14, 165, 233, 0.02)"
+                            />
+                            <text
+                              x={combinedFlowChartProps.nowX + 6}
+                              y={combinedFlowChartProps.paddingTop + 10}
+                              fill="var(--color-info)"
+                              fontSize="7"
+                              fontWeight="600"
+                              opacity="0.6"
+                            >
+                              VÙNG DỰ BÁO 🔮
                             </text>
-                            <text x={flowChartProps.width - flowChartProps.paddingRight} y={flowChartProps.height - 8} fill="var(--text-muted)" fontSize="9" textAnchor="end">
-                              {new Date(flowChartProps.points[flowChartProps.points.length-1].time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})} {new Date(flowChartProps.points[flowChartProps.points.length-1].time).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}
-                            </text>
-                          </>
+                          </g>
                         )}
 
-                        {/* Synchronized Hover elements */}
-                        {hoveredIndex !== null && flowChartProps.points[hoveredIndex] && (() => {
-                          const p = flowChartProps.points[hoveredIndex];
+                        {/* History lines */}
+                        {combinedFlowChartProps.histOutflowLine && <path d={combinedFlowChartProps.histOutflowLine} fill="none" stroke="var(--color-primary)" strokeWidth="2" />}
+                        {combinedFlowChartProps.histInflowLine && <path d={combinedFlowChartProps.histInflowLine} fill="none" stroke="var(--color-success)" strokeWidth="1.5" strokeDasharray="3 3" />}
+
+                        {/* Forecast lines */}
+                        {combinedFlowChartProps.foreOutflowLine && <path d={combinedFlowChartProps.foreOutflowLine} fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeDasharray="2 2" />}
+                        {combinedFlowChartProps.foreInflowLine && <path d={combinedFlowChartProps.foreInflowLine} fill="none" stroke="var(--color-success)" strokeWidth="1.5" strokeDasharray="1 3" />}
+
+                        {/* Separator */}
+                        <line x1={combinedFlowChartProps.nowX} y1={combinedFlowChartProps.paddingTop} x2={combinedFlowChartProps.nowX} y2={combinedFlowChartProps.height - combinedFlowChartProps.paddingBottom} stroke="rgba(255,255,255,0.4)" strokeWidth="1" strokeDasharray="2 2" />
+
+                        {forecastHoverIndex !== null && combinedFlowChartProps.points[forecastHoverIndex] && (() => {
+                          const p = combinedFlowChartProps.points[forecastHoverIndex];
+                          const hasGates = p.isForecast && (p.ncxs > 0 || p.ncxm > 0);
                           return (
                             <g pointerEvents="none">
-                              {/* Vertical tracking dashed line */}
-                              <line 
-                                x1={p.x} 
-                                y1={flowChartProps.paddingTop} 
-                                x2={p.x} 
-                                y2={flowChartProps.height - flowChartProps.paddingBottom} 
-                                stroke="var(--color-primary)" 
-                                strokeWidth="1" 
-                                strokeDasharray="3" 
-                              />
-                              {/* Highlight circles */}
-                              <circle cx={p.x} cy={p.yOutflow} r="4" fill="var(--color-primary)" stroke="var(--bg-surface-solid)" strokeWidth="1.5" />
-                              <circle cx={p.x} cy={p.yInflow} r="4" fill="var(--color-success)" stroke="var(--bg-surface-solid)" strokeWidth="1.5" />
+                              <line x1={p.x} y1={combinedFlowChartProps.paddingTop} x2={p.x} y2={combinedFlowChartProps.height - combinedFlowChartProps.paddingBottom} stroke="var(--color-primary)" strokeWidth="1" strokeDasharray="3" />
+                              <circle cx={p.x} cy={p.yOutflow} r="4" fill="var(--color-primary)" stroke="#0f172a" strokeWidth="1.5" />
+                              <circle cx={p.x} cy={p.yInflow} r="4" fill="var(--color-success)" stroke="#0f172a" strokeWidth="1.5" />
                               
-                              {/* Tooltip Card */}
                               <rect
-                                x={Math.max(flowChartProps.paddingLeft, Math.min(p.x - 70, flowChartProps.width - flowChartProps.paddingRight - 140))}
-                                y={Math.max(5, Math.min(p.yOutflow - 45, flowChartProps.height - flowChartProps.paddingBottom - 50))}
-                                width="140"
-                                height="42"
+                                x={Math.max(combinedFlowChartProps.paddingLeft, Math.min(p.x - 75, combinedFlowChartProps.width - combinedFlowChartProps.paddingRight - 150))}
+                                y={Math.max(5, p.yOutflow - 50)}
+                                width="150"
+                                height={hasGates ? 54 : 42}
                                 rx="6"
                                 fill="rgba(15, 23, 42, 0.95)"
                                 stroke="rgba(14, 165, 233, 0.2)"
                                 strokeWidth="1"
                               />
-                              {/* Tooltip Qx */}
-                              <text
-                                x={Math.max(flowChartProps.paddingLeft + 70, Math.min(p.x, flowChartProps.width - flowChartProps.paddingRight - 70))}
-                                y={Math.max(16, Math.min(p.yOutflow - 34, flowChartProps.height - flowChartProps.paddingBottom - 38))}
-                                fill="var(--color-primary)"
-                                fontSize="9"
-                                fontWeight="700"
-                                textAnchor="middle"
-                              >
-                                Xả (Qx): {p.q_x.toLocaleString()} m³/s
+                              <text x={Math.max(combinedFlowChartProps.paddingLeft + 75, Math.min(p.x, combinedFlowChartProps.width - combinedFlowChartProps.paddingRight - 75))} y={Math.max(16, p.yOutflow - 38)} fill="var(--color-primary)" fontSize="9" fontWeight="700" textAnchor="middle">
+                                Qx {p.isForecast ? "(dự báo)" : "(thực tế)"}: {p.q_x.toLocaleString()} m³/s
                               </text>
-                              {/* Tooltip Qve */}
-                              <text
-                                x={Math.max(flowChartProps.paddingLeft + 70, Math.min(p.x, flowChartProps.width - flowChartProps.paddingRight - 70))}
-                                y={Math.max(28, Math.min(p.yOutflow - 22, flowChartProps.height - flowChartProps.paddingBottom - 26))}
-                                fill="var(--color-success)"
-                                fontSize="9"
-                                fontWeight="700"
-                                textAnchor="middle"
-                              >
-                                Về (Qve): {p.qve.toLocaleString()} m³/s
+                              <text x={Math.max(combinedFlowChartProps.paddingLeft + 75, Math.min(p.x, combinedFlowChartProps.width - combinedFlowChartProps.paddingRight - 75))} y={Math.max(28, p.yOutflow - 26)} fill="var(--color-success)" fontSize="9" fontWeight="700" textAnchor="middle">
+                                Qve {p.isForecast ? "(dự báo)" : "(thực tế)"}: {p.qve.toLocaleString()} m³/s
                               </text>
-                              {/* Tooltip Date */}
-                              <text
-                                x={Math.max(flowChartProps.paddingLeft + 70, Math.min(p.x, flowChartProps.width - flowChartProps.paddingRight - 70))}
-                                y={Math.max(40, Math.min(p.yOutflow - 10, flowChartProps.height - flowChartProps.paddingBottom - 14))}
-                                fill="var(--text-muted)"
-                                fontSize="7"
-                                textAnchor="middle"
-                              >
-                                {new Date(p.time).toLocaleDateString('vi-VN', {month: '2-digit', day: '2-digit'})} {new Date(p.time).toLocaleTimeString('vi-VN', {hour: '2-digit', minute:'2-digit'})}
-                              </text>
+                              {hasGates ? (
+                                <text x={Math.max(combinedFlowChartProps.paddingLeft + 75, Math.min(p.x, combinedFlowChartProps.width - combinedFlowChartProps.paddingRight - 75))} y={Math.max(40, p.yOutflow - 14)} fill="var(--color-danger)" fontSize="8" fontWeight="600" textAnchor="middle">
+                                  Cửa mở: {p.ncxs || 0} sâu / {p.ncxm || 0} mặt
+                                </text>
+                              ) : null}
                             </g>
                           );
                         })()}
 
-                        {/* Interactive overlay target */}
                         <rect
-                          x={flowChartProps.paddingLeft}
-                          y={flowChartProps.paddingTop}
-                          width={flowChartProps.width - flowChartProps.paddingLeft - flowChartProps.paddingRight}
-                          height={flowChartProps.height - flowChartProps.paddingTop - flowChartProps.paddingBottom}
+                          x={combinedFlowChartProps.paddingLeft}
+                          y={combinedFlowChartProps.paddingTop}
+                          width={combinedFlowChartProps.width - combinedFlowChartProps.paddingLeft - combinedFlowChartProps.paddingRight}
+                          height={combinedFlowChartProps.height - combinedFlowChartProps.paddingTop - combinedFlowChartProps.paddingBottom}
                           fill="transparent"
-                          onMouseMove={(e) => handleChartMouseMove(e, flowChartProps.width)}
-                          onMouseLeave={handleChartMouseLeave}
+                          onMouseMove={(e) => {
+                            if (combinedFlowChartProps.points.length === 0) return;
+                            const svg = e.currentTarget.ownerSVGElement;
+                            if (!svg) return;
+                            const rect = svg.getBoundingClientRect();
+                            const mouseX = ((e.clientX - rect.left) / rect.width) * combinedFlowChartProps.width;
+                            let closest = 0;
+                            let minD = Infinity;
+                            for (let i = 0; i < combinedFlowChartProps.points.length; i++) {
+                              const ptX = combinedFlowChartProps.paddingLeft + (i / (combinedFlowChartProps.points.length - 1)) * (combinedFlowChartProps.width - combinedFlowChartProps.paddingLeft - combinedFlowChartProps.paddingRight);
+                              const diff = Math.abs(ptX - mouseX);
+                              if (diff < minD) {
+                                minD = diff;
+                                closest = i;
+                              }
+                            }
+                            setForecastHoverIndex(closest);
+                          }}
+                          onMouseLeave={() => setForecastHoverIndex(null)}
                           style={{ cursor: 'crosshair' }}
                         />
                       </svg>
@@ -2882,6 +3236,96 @@ export default function Dashboard() {
                   ) : null}
                 </div>
               </div>
+
+              {/* Integrated Forecast Summary Card */}
+              {forecastData.length > 0 && (() => {
+                const htls = forecastData.map(d => d.htl);
+                const maxForecastH = Math.max(...htls);
+                const minForecastH = Math.min(...htls);
+                const maxDeepGatesOpen = Math.max(0, ...forecastData.map(d => d.ncxs || 0));
+                const maxSurfaceGatesOpen = Math.max(0, ...forecastData.map(d => d.ncxm || 0));
+                const maxQxtDischarge = Math.max(0, ...forecastData.map(d => d.qxt || 0));
+
+                let totalEnergyKwh = 0;
+                let willExceedLimit = false;
+                let willBeDead = false;
+                let daysToLimit = 0;
+
+                forecastData.forEach((d, idx) => {
+                  if (selectedReservoir.tailraceElev && selectedReservoir.installedCapacity) {
+                    const head = d.htl - selectedReservoir.tailraceElev;
+                    if (head > 0 && d.qxm > 0) {
+                      const powerKw = Math.min(selectedReservoir.installedCapacity * 1000, 0.85 * 9.81 * d.qxm * head);
+                      totalEnergyKwh += powerKw;
+                    }
+                  }
+                  if (d.htl >= selectedReservoir.hControl) {
+                    if (!willExceedLimit) {
+                      willExceedLimit = true;
+                      daysToLimit = Math.max(1, Math.round(idx / 24));
+                    }
+                  }
+                  if (d.htl <= selectedReservoir.hMinOp) {
+                    willBeDead = true;
+                  }
+                });
+
+                return (
+                  <div className="glass-panel" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.015)' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      📋 Kết quả phân tích kịch bản dự báo
+                    </span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
+                      <div>
+                        <span style={{ color: 'var(--text-secondary)' }}>Mực nước cao nhất:</span>
+                        <strong style={{ display: 'block', fontSize: '14px', color: maxForecastH >= selectedReservoir.hControl ? 'var(--color-danger)' : 'var(--text-primary)' }}>{maxForecastH.toFixed(2)} m</strong>
+                      </div>
+                      <div>
+                        <span style={{ color: 'var(--text-secondary)' }}>Mực nước thấp nhất:</span>
+                        <strong style={{ display: 'block', fontSize: '14px', color: minForecastH <= selectedReservoir.hMinOp ? 'var(--color-danger)' : 'var(--text-primary)' }}>{minForecastH.toFixed(2)} m</strong>
+                      </div>
+                      
+                      {maxQxtDischarge > 0 ? (
+                        <div style={{ gridColumn: '1 / span 2', background: forecastScenario === 'constant' ? 'rgba(255, 255, 255, 0.03)' : 'rgba(239, 68, 68, 0.06)', border: forecastScenario === 'constant' ? '1px solid var(--border-color)' : '1px solid rgba(239, 68, 68, 0.2)', padding: '8px 10px', borderRadius: '6px' }}>
+                          <span style={{ color: forecastScenario === 'constant' ? 'var(--text-primary)' : 'var(--color-danger)', fontWeight: '600', fontSize: '11px', display: 'block', marginBottom: '2px' }}>
+                            {forecastScenario === 'constant' ? '🔄 Trạng thái dòng chảy không đổi:' : '🌊 Dự báo xả lũ qua cửa xả tràn:'}
+                          </span>
+                          <strong style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
+                            {forecastScenario === 'constant' ? `Duy trì mở ${maxDeepGatesOpen} cửa xả sâu` : `Mở tối đa ${maxDeepGatesOpen} cửa xả sâu ${maxSurfaceGatesOpen > 0 ? `+ ${maxSurfaceGatesOpen} cửa xả mặt` : ''}`}
+                          </strong>
+                          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'block', marginTop: '2px' }}>
+                            Lưu lượng xả tràn (Qxt): <strong>{maxQxtDischarge.toLocaleString()} m³/s</strong>
+                          </span>
+                        </div>
+                      ) : (
+                        <div style={{ gridColumn: '1 / span 2', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.15)', padding: '6px 10px', borderRadius: '6px', fontSize: '11px', color: 'var(--color-success)' }}>
+                          ✅ Dự báo không mở cửa xả tràn (Toàn bộ cửa xả đóng 100%, nước được cắt lũ và trữ lại).
+                        </div>
+                      )}
+
+                      {totalEnergyKwh > 0 && (
+                        <div style={{ gridColumn: '1 / span 2', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '8px' }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>Ước tính sản lượng điện dự kiến phát ra:</span>
+                          <strong style={{ display: 'block', fontSize: '15px', color: 'var(--color-success)' }}>
+                            {(totalEnergyKwh / 1000000).toLocaleString(undefined, { maximumFractionDigits: 2 })} triệu kWh
+                          </strong>
+                        </div>
+                      )}
+                    </div>
+
+                    {willExceedLimit && (
+                      <div style={{ background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.15)', padding: '8px 10px', borderRadius: '6px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        <strong style={{ color: 'var(--color-danger)' }}>⚠️ BÁO ĐỘNG LŨ:</strong> Nước dâng vượt kiểm soát ({selectedReservoir.hControl}m) trong khoảng {daysToLimit} ngày tới. Cần mở xả tràn!
+                      </div>
+                    )}
+                    {willBeDead && (
+                      <div style={{ background: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.15)', padding: '8px 10px', borderRadius: '6px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        <strong style={{ color: 'var(--color-warning)' }}>⚠️ CẢNH BÁO:</strong> Hồ có nguy cơ chạm mực nước chết ({selectedReservoir.hMinOp}m). Phát điện có thể bị tạm dừng.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>

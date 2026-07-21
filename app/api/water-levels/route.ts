@@ -247,6 +247,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     success: true,
     isFromDb,
+    isStale,
+    latestTimestamp: latestData.length > 0 ? latestData[0].timestamp : null,
     data: enrichedData,
     overrides
   });
