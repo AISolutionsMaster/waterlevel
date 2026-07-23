@@ -2,14 +2,22 @@ name: Hourly Water Level Sync
 
 on:
   schedule:
-    # Runs at the start of every hour (UTC)
-    - cron: '0 * * * *'
+    # Runs twice per hour at off-peak minutes (17 and 47) to avoid GitHub Actions peak queue congestion at :00
+    - cron: '17,47 * * * *'
   workflow_dispatch:
     # Allows manual triggering from the GitHub Actions UI
+  repository_dispatch:
+    # Allows external cron triggers (e.g., cron-job.org, Cloudflare Worker, Vercel) via GitHub API
+    types: [sync_data]
+
+concurrency:
+  group: sync-water-levels
+  cancel-in-progress: true
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository code
@@ -27,3 +35,4 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: node utils/sync-github-actions.js
+
