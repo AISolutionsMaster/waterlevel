@@ -2,8 +2,9 @@ name: Hourly Water Level Sync
 
 on:
   schedule:
-    # Runs twice per hour at off-peak minutes (17 and 47) to avoid GitHub Actions peak queue congestion at :00
-    - cron: '17,47 * * * *'
+    # Runs once every 2 hours at minute 17 (12 runs/day). 
+    # Since sync-github-actions.js fetches 6 hours of data, 0 data is ever lost.
+    - cron: '17 */2 * * *'
   workflow_dispatch:
     # Allows manual triggering from the GitHub Actions UI
   repository_dispatch:
@@ -17,22 +18,24 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js environment
+      - name: Setup Node.js environment with npm cache
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Install HTTP Proxy Agent
-        run: npm install https-proxy-agent
+      - name: Install dependencies
+        run: npm ci || npm install
 
       - name: Run Proxy Crawl and Sync Script
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: node utils/sync-github-actions.js
+
 

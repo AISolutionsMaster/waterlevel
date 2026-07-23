@@ -103,50 +103,74 @@ async function getVietnamProxies() {
 }
 
 // Fetch EVN page using a specific proxy agent via native https module
-function fetchPageWithProxy(targetDate, proxy) {
-  return new Promise((resolve, reject) => {
+function fetchPageWithProxy(targetDate, proxy, timeoutMs = 4000) {
+  return new Promise((resolve) => {
     let pathQuery = '/PageHoChuaThuyDienEmbedEVN.aspx';
     if (targetDate) {
       pathQuery += `?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
     }
 
     const https = require('https');
-    const agent = new HttpsProxyAgent(`http://${proxy}`);
-    
-    const options = {
-      hostname: 'hochuathuydien.evn.com.vn',
-      port: 443,
-      path: pathQuery,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-      },
-      agent: agent,
-      timeout: 10000 // 10 seconds timeout
-    };
+    try {
+      const agent = new HttpsProxyAgent(`http://${proxy}`);
+      
+      const options = {
+        hostname: 'hochuathuydien.evn.com.vn',
+        port: 443,
+        path: pathQuery,
+        method: 'GET',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+        },
+        agent: agent,
+        timeout: timeoutMs
+      };
 
-    const req = https.request(options, (res) => {
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        return resolve(null); // Return null on bad status to try next proxy
-      }
-      let body = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => resolve(body));
-    });
+      const req = https.request(options, (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return resolve(null);
+        }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => resolve(body));
+      });
 
-    req.on('error', (e) => {
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => {
+        req.destroy();
+        resolve(null);
+      });
+
+      req.end();
+    } catch (e) {
       resolve(null);
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(null);
-    });
-
-    req.end();
+    }
   });
+}
+
+// Concurrently test proxies in batches of 10 to find a working one fast (< 4 seconds)
+async function findWorkingProxyFast(proxies) {
+  console.log(`🔎 Đang kiểm tra ${proxies.length} proxy song song theo nhóm 10 (timeout 3.5s)...`);
+  const batchSize = 10;
+  for (let i = 0; i < proxies.length; i += batchSize) {
+    const batch = proxies.slice(i, i + batchSize);
+    const results = await Promise.all(
+      batch.map(async (proxy) => {
+        const html = await fetchPageWithProxy(new Date(), proxy, 3500);
+        if (html && html.includes("<tbody>")) {
+          return proxy;
+        }
+        return null;
+      })
+    );
+    const found = results.find(Boolean);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
 }
 
 async function main() {
@@ -154,25 +178,16 @@ async function main() {
   const proxies = await getVietnamProxies();
   
   const hoursToScrape = 6;
-  let workingProxy = null;
   let allRecords = [];
   
-  // 1. Find a working proxy by testing the current hour
-  console.log("🔎 Đang kiểm tra để tìm một proxy Việt Nam hoạt động...");
-  for (const proxy of proxies) {
-    console.log(`   * Thử nghiệm proxy: ${proxy}...`);
-    const html = await fetchPageWithProxy(new Date(), proxy);
-    if (html && html.includes("<tbody>")) {
-      console.log(`✨ Kết nối thành công qua proxy: ${proxy}`);
-      workingProxy = proxy;
-      break;
-    }
-  }
+  // 1. Find a working proxy concurrently
+  const workingProxy = await findWorkingProxyFast(proxies);
 
   if (!workingProxy) {
     console.error("❌ Không tìm thấy proxy Việt Nam nào hoạt động vào lúc này. Vui lòng chạy lại sau.");
     process.exit(1);
   }
+  console.log(`✨ Kết nối thành công qua proxy: ${workingProxy}`);
 
   // 2. Fetch the last 6 hours of data using the working proxy
   console.log(`🕒 Tiến hành cào dữ liệu ${hoursToScrape} giờ gần nhất qua proxy: ${workingProxy}...`);
