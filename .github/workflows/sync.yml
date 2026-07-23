@@ -2,9 +2,9 @@ name: Hourly Water Level Sync
 
 on:
   schedule:
-    # Runs once every 2 hours at minute 17 (12 runs/day). 
-    # Since sync-github-actions.js fetches 6 hours of data, 0 data is ever lost.
-    - cron: '17 */2 * * *'
+    # Runs every hour at off-peak minute 17 (24 runs/day). 
+    # Takes only ~30s per run (~360 mins/month, well within the 2,000 free minutes budget).
+    - cron: '17 * * * *'
   workflow_dispatch:
     # Allows manual triggering from the GitHub Actions UI
   repository_dispatch:
