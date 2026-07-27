@@ -161,6 +161,9 @@ export async function GET(request: Request) {
       hControl,
       status,
       activeSeasonName: activePhase ? activePhase.name : "N/A",
+      activeSeasonRange: activePhase
+        ? `${String(activePhase.startDay).padStart(2, "0")}/${String(activePhase.startMonth).padStart(2, "0")} - ${String(activePhase.endDay).padStart(2, "0")}/${String(activePhase.endMonth).padStart(2, "0")}`
+        : null,
       transitionAlert: daysToTransition <= 7 ? {
         daysRemaining: daysToTransition,
         nextSeasonName: nextPhase?.name || "",

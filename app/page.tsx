@@ -17,6 +17,76 @@ import {
   Layers,
   ChevronRight
 } from 'lucide-react';
+import { reservoirsMetadata, getActiveSeasonAndTransition } from '@/data/reservoirs';
+
+/** Resolve control level (and phase name) for a reservoir at a given timestamp. */
+function getSeasonalControlAt(reservoirName: string, timestamp: string, fallback: number) {
+  const meta = reservoirsMetadata[reservoirName];
+  if (!meta || !meta.seasons?.length) {
+    return { hControl: fallback, name: '' };
+  }
+  const { activePhase } = getActiveSeasonAndTransition(meta, new Date(timestamp));
+  return { hControl: activePhase.hControl, name: activePhase.name };
+}
+
+/**
+ * Build a step-path for seasonal control levels across chart points.
+ * Horizontal segments stay at each phase's hControl; vertical jumps mark transitions.
+ */
+function buildSeasonalControlPath(
+  points: { x: number; time: string }[],
+  reservoirName: string,
+  fallbackHControl: number,
+  yMin: number,
+  yRange: number,
+  height: number,
+  paddingTop: number,
+  paddingBottom: number
+): {
+  path: string | null;
+  segments: { x1: number; x2: number; y: number; hControl: number; name: string }[];
+} {
+  if (points.length === 0) return { path: null, segments: [] };
+
+  const mapY = (h: number) =>
+    height - paddingBottom - ((h - yMin) / yRange) * (height - paddingTop - paddingBottom);
+
+  const controls = points.map((p) => {
+    const { hControl, name } = getSeasonalControlAt(reservoirName, p.time, fallbackHControl);
+    return { x: p.x, hControl, name, y: mapY(hControl) };
+  });
+
+  // Step-after polyline: hold previous level until the next point, then jump.
+  let path = `M ${controls[0].x} ${controls[0].y}`;
+  for (let i = 1; i < controls.length; i++) {
+    path += ` L ${controls[i].x} ${controls[i - 1].y}`;
+    if (Math.abs(controls[i].y - controls[i - 1].y) > 0.01) {
+      path += ` L ${controls[i].x} ${controls[i].y}`;
+    }
+  }
+
+  // Contiguous segments for labels (x2 reaches next transition — matches step-after path)
+  const segments: { x1: number; x2: number; y: number; hControl: number; name: string }[] = [];
+  let segStart = 0;
+  for (let i = 1; i <= controls.length; i++) {
+    const ended =
+      i === controls.length ||
+      controls[i].hControl !== controls[segStart].hControl ||
+      controls[i].name !== controls[segStart].name;
+    if (ended) {
+      segments.push({
+        x1: controls[segStart].x,
+        x2: i < controls.length ? controls[i].x : controls[controls.length - 1].x,
+        y: controls[segStart].y,
+        hControl: controls[segStart].hControl,
+        name: controls[segStart].name,
+      });
+      segStart = i;
+    }
+  }
+
+  return { path, segments };
+}
 
 interface TransitionAlert {
   daysRemaining: number;
@@ -44,6 +114,7 @@ interface ReservoirData {
   region: string;
   status: "normal" | "warning" | "danger" | "dead";
   activeSeasonName: string;
+  activeSeasonRange: string | null;
   transitionAlert: TransitionAlert | null;
   installedCapacity: number | null;
   tailraceElev: number | null;
@@ -563,9 +634,14 @@ export default function Dashboard() {
       ...forecastData.map(f => ({ ...f, isForecast: true }))
     ];
 
+    // Seasonal control levels across the visible time window (for y-scale + step path)
+    const seasonalControls = combined.map(pt =>
+      getSeasonalControlAt(selectedReservoir.name, pt.timestamp, selectedReservoir.hControl).hControl
+    );
+
     const htls = combined.map(h => h.htl);
-    const minH = Math.min(...htls);
-    const maxH = Math.max(...htls);
+    const minH = Math.min(...htls, ...seasonalControls);
+    const maxH = Math.max(...htls, ...seasonalControls);
     let hRange = maxH - minH;
     if (hRange < 0.5) hRange = 0.5;
 
@@ -575,7 +651,7 @@ export default function Dashboard() {
     const yRange = yMax - yMin;
 
     const points = combined.map((pt, idx) => {
-      const x = paddingLeft + (idx / (combined.length - 1)) * (width - paddingLeft - paddingRight);
+      const x = paddingLeft + (idx / Math.max(combined.length - 1, 1)) * (width - paddingLeft - paddingRight);
       const y = height - paddingBottom - ((pt.htl - yMin) / yRange) * (height - paddingTop - paddingBottom);
       return { x, y, htl: pt.htl, time: pt.timestamp, isForecast: pt.isForecast };
     });
@@ -603,11 +679,16 @@ export default function Dashboard() {
 
     const nowX = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].x : paddingLeft;
 
-    const hControl = selectedReservoir.hControl;
-    let hControlY = null;
-    if (hControl >= yMin && hControl <= yMax) {
-      hControlY = height - paddingBottom - ((hControl - yMin) / yRange) * (height - paddingTop - paddingBottom);
-    }
+    const { path: hControlPath, segments: hControlSegments } = buildSeasonalControlPath(
+      points,
+      selectedReservoir.name,
+      selectedReservoir.hControl,
+      yMin,
+      yRange,
+      height,
+      paddingTop,
+      paddingBottom
+    );
 
     return {
       width,
@@ -624,7 +705,8 @@ export default function Dashboard() {
       nowX,
       yMin: yMin.toFixed(2),
       yMax: yMax.toFixed(2),
-      hControlY
+      hControlPath,
+      hControlSegments
     };
   }, [history, forecastData, selectedReservoir]);
 
@@ -884,9 +966,15 @@ export default function Dashboard() {
     const paddingTop = 8;
     const paddingBottom = 16;
 
+    const fallbackControl = meta.hControl || meta.hdbt || 0;
+    const reservoirName = meta.name || '';
+    const seasonalControls = historyData.map(pt =>
+      getSeasonalControlAt(reservoirName, pt.timestamp, fallbackControl).hControl
+    );
+
     const htls = historyData.map(h => h.htl);
-    const minH = Math.min(...htls);
-    const maxH = Math.max(...htls);
+    const minH = Math.min(...htls, ...seasonalControls);
+    const maxH = Math.max(...htls, ...seasonalControls);
     let hRange = maxH - minH;
     if (hRange < 0.5) hRange = 0.5;
 
@@ -896,7 +984,7 @@ export default function Dashboard() {
     const yRange = yMax - yMin;
 
     const points = historyData.map((pt, idx) => {
-      const x = paddingLeft + (idx / (historyData.length - 1)) * (width - paddingLeft - paddingRight);
+      const x = paddingLeft + (idx / Math.max(historyData.length - 1, 1)) * (width - paddingLeft - paddingRight);
       const y = height - paddingBottom - ((pt.htl - yMin) / yRange) * (height - paddingTop - paddingBottom);
       return { x, y, htl: pt.htl, time: pt.timestamp, isForecast: pt.isForecast, ncxs: pt.ncxs, ncxm: pt.ncxm };
     });
@@ -922,11 +1010,16 @@ export default function Dashboard() {
 
     const nowX = historyPoints.length > 0 ? historyPoints[historyPoints.length - 1].x : paddingLeft;
 
-    const hControl = meta.hControl || meta.hdbt;
-    let hControlY = null;
-    if (hControl >= yMin && hControl <= yMax) {
-      hControlY = height - paddingBottom - ((hControl - yMin) / yRange) * (height - paddingTop - paddingBottom);
-    }
+    const { path: hControlPath, segments: hControlSegments } = buildSeasonalControlPath(
+      points,
+      reservoirName,
+      fallbackControl,
+      yMin,
+      yRange,
+      height,
+      paddingTop,
+      paddingBottom
+    );
 
     return {
       width,
@@ -943,7 +1036,8 @@ export default function Dashboard() {
       nowX,
       yMin: yMin.toFixed(1),
       yMax: yMax.toFixed(1),
-      hControlY
+      hControlPath,
+      hControlSegments
     };
   };
 
@@ -1930,8 +2024,16 @@ export default function Dashboard() {
                                 {/* Separator */}
                                 <line x1={miniChart.nowX} y1={miniChart.paddingTop} x2={miniChart.nowX} y2={miniChart.height - miniChart.paddingBottom} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="1 1" />
 
-                                {miniChart.hControlY !== null && (
-                                  <line x1={miniChart.paddingLeft} y1={miniChart.hControlY} x2={miniChart.width - miniChart.paddingRight} y2={miniChart.hControlY} stroke="var(--color-warning)" strokeWidth="1" strokeDasharray="3 3" />
+                                {miniChart.hControlPath && (
+                                  <path
+                                    d={miniChart.hControlPath}
+                                    fill="none"
+                                    stroke="var(--color-warning)"
+                                    strokeWidth="1"
+                                    strokeDasharray="3 3"
+                                    opacity="0.85"
+                                    strokeLinejoin="round"
+                                  />
                                 )}
 
                                 {/* Hover vertical line & tooltip */}
@@ -2269,7 +2371,7 @@ export default function Dashboard() {
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', color: 'var(--text-secondary)' }}>
                   <div>
-                    <strong>Giai đoạn hiện tại:</strong> <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{selectedReservoir.activeSeasonName}</span> (15/06 - 19/07).
+                    <strong>Giai đoạn hiện tại:</strong> <span style={{ color: 'var(--text-primary)', fontWeight: '600' }}>{selectedReservoir.activeSeasonName}</span>{selectedReservoir.activeSeasonRange ? ` (${selectedReservoir.activeSeasonRange})` : ''}.
                   </div>
 
                   {(() => {
@@ -2968,13 +3070,41 @@ export default function Dashboard() {
                         <line x1={combinedChartProps.paddingLeft} y1={combinedChartProps.paddingTop} x2={combinedChartProps.width - combinedChartProps.paddingRight} y2={combinedChartProps.paddingTop} stroke="rgba(255,255,255,0.05)" strokeDasharray="3" />
                         <line x1={combinedChartProps.paddingLeft} y1={combinedChartProps.height - combinedChartProps.paddingBottom} x2={combinedChartProps.width - combinedChartProps.paddingRight} y2={combinedChartProps.height - combinedChartProps.paddingBottom} stroke="rgba(255,255,255,0.05)" />
                         
-                        {/* Control limit line */}
-                        {combinedChartProps.hControlY !== null && (
+                        {/* Seasonal control limit (stepped by phase) */}
+                        {combinedChartProps.hControlPath && (
                           <g>
-                            <line x1={combinedChartProps.paddingLeft} y1={combinedChartProps.hControlY} x2={combinedChartProps.width - combinedChartProps.paddingRight} y2={combinedChartProps.hControlY} stroke="var(--color-warning)" strokeWidth="1.5" strokeDasharray="4 4" opacity="0.8" />
-                            <text x={combinedChartProps.width - combinedChartProps.paddingRight - 4} y={combinedChartProps.hControlY - 4} fill="var(--color-warning)" fontSize="8" fontWeight="600" textAnchor="end">
-                              Giới hạn lũ ({selectedReservoir.hControl.toFixed(1)}m)
-                            </text>
+                            <path
+                              d={combinedChartProps.hControlPath}
+                              fill="none"
+                              stroke="var(--color-warning)"
+                              strokeWidth="1.5"
+                              strokeDasharray="4 4"
+                              opacity="0.85"
+                              strokeLinejoin="round"
+                            />
+                            {combinedChartProps.hControlSegments.map((seg, i) => {
+                              const segWidth = seg.x2 - seg.x1;
+                              if (segWidth < 36) return null;
+                              const midX = (seg.x1 + seg.x2) / 2;
+                              // Prefer phase name when segment is wide enough; otherwise just the level
+                              const label = seg.name && segWidth >= 70
+                                ? `${seg.name} (${seg.hControl.toFixed(1)}m)`
+                                : `${seg.hControl.toFixed(1)}m`;
+                              return (
+                                <text
+                                  key={`ctrl-seg-${i}`}
+                                  x={midX}
+                                  y={seg.y - 4}
+                                  fill="var(--color-warning)"
+                                  fontSize="8"
+                                  fontWeight="600"
+                                  textAnchor="middle"
+                                  opacity="0.9"
+                                >
+                                  {label}
+                                </text>
+                              );
+                            })}
                           </g>
                         )}
 
@@ -3332,7 +3462,7 @@ export default function Dashboard() {
                 </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar style={{ width: '12px' }} />
-                  Giai đoạn vận hành quy định: {selectedReservoir.activeSeasonName}
+                  Giai đoạn vận hành quy định: {selectedReservoir.activeSeasonName}{selectedReservoir.activeSeasonRange ? ` (${selectedReservoir.activeSeasonRange})` : ''}
                 </span>
               </div>
             </div>
