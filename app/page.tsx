@@ -96,7 +96,7 @@ export default function Dashboard() {
 
   // Forecasting states
   const [forecastScenario, setForecastScenario] = useState<'constant' | 'flood' | 'flood_sonla' | 'flood_hoabinh' | 'dry'>('constant');
-  const [forecastRange, setForecastRange] = useState<'3d' | '7d' | '30d'>('3d');
+  const [forecastRange, setForecastRange] = useState<'3d' | '7d' | '15d' | '30d'>('3d');
   const [forecastData, setForecastData] = useState<HistoryPoint[]>([]);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [forecastHoverIndex, setForecastHoverIndex] = useState<number | null>(null);
@@ -341,16 +341,14 @@ export default function Dashboard() {
 
   const handleRangeChange = (range: "3d" | "7d" | "15d" | "30d" | "1y") => {
     setHistoryRange(range);
-    if (range === '3d' || range === '7d' || range === '30d') {
-      setForecastRange(range);
-    }
+    setForecastRange(range === "1y" ? "30d" : range);
     if (selectedReservoir) {
       setHistory([]);
       fetchReservoirHistory(selectedReservoir.name, selectedReservoir.htl, range);
     }
   };
 
-  const handleForecastRangeChange = (range: "3d" | "7d" | "30d") => {
+  const handleForecastRangeChange = (range: "3d" | "7d" | "15d" | "30d") => {
     setForecastRange(range);
     setHistoryRange(range);
     if (selectedReservoir) {
