@@ -1528,7 +1528,7 @@ export default function Dashboard() {
                     "7d": "7 ngày",
                     "15d": "15 ngày",
                     "30d": "30 ngày",
-                    "1y": "Tất cả"
+                    "1y": "1 năm"
                   };
                   const isActive = historyRange === r;
                   return (
@@ -2924,7 +2924,7 @@ export default function Dashboard() {
                   {/* History Range Selector */}
                   <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '11px' }}>
                     {(["3d", "7d", "15d", "30d", "1y"] as const).map((r) => {
-                      const labels: Record<string, string> = { "3d": "Lịch sử 3 ngày", "7d": "7 ngày", "15d": "15 ngày", "30d": "30 ngày", "1y": "Tất cả" };
+                      const labels: Record<string, string> = { "3d": "Lịch sử 3 ngày", "7d": "7 ngày", "15d": "15 ngày", "30d": "30 ngày", "1y": "1 năm" };
                       const isActive = historyRange === r;
                       return (
                         <button
