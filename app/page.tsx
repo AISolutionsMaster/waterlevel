@@ -1672,8 +1672,8 @@ export default function Dashboard() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Thời gian dự báo:</span>
               <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)', fontSize: '11px' }}>
-                {(['3d', '7d', '30d'] as const).map((r) => {
-                  const labels: Record<string, string> = { '3d': '3 ngày', '7d': '7 ngày', '30d': '1 tháng' };
+                {(['3d', '7d', '15d', '30d'] as const).map((r) => {
+                  const labels: Record<string, string> = { '3d': '3 ngày', '7d': '7 ngày', '15d': '15 ngày', '30d': '1 tháng' };
                   return (
                     <button
                       key={r}
@@ -2991,8 +2991,8 @@ export default function Dashboard() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', marginTop: '4px' }}>
                   <span style={{ color: 'var(--text-muted)' }}>Thời gian dự báo:</span>
                   <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                    {(['3d', '7d', '30d'] as const).map((r) => {
-                      const labels: Record<string, string> = { '3d': '3 ngày', '7d': '7 ngày', '30d': '1 tháng' };
+                    {(['3d', '7d', '15d', '30d'] as const).map((r) => {
+                      const labels: Record<string, string> = { '3d': '3 ngày', '7d': '7 ngày', '15d': '15 ngày', '30d': '1 tháng' };
                       return (
                         <button
                           key={r}
