@@ -1769,7 +1769,7 @@ export default function Dashboard() {
                 if (!item) return null;
 
                 const histText = historyRange === "3d" ? "3 ngày" : historyRange === "7d" ? "7 ngày" : historyRange === "15d" ? "15 ngày" : historyRange === "30d" ? "30 ngày" : "1 năm";
-                const foreText = forecastRange === "3d" ? "3 ngày" : forecastRange === "7d" ? "7 ngày" : "1 tháng";
+                const foreText = forecastRange === "3d" ? "3 ngày" : forecastRange === "7d" ? "7 ngày" : forecastRange === "15d" ? "15 ngày" : "1 tháng";
 
                 // Find history data
                 const historyData = cascadeHistory[name] || [];

@@ -371,6 +371,7 @@ export async function GET(request: Request) {
 
   let durationHours = 72;
   if (range === '7d') durationHours = 168;
+  else if(range === '15d') durationHours = 360;
   else if (range === '30d') durationHours = 720;
 
   await initDatabaseSchema();
