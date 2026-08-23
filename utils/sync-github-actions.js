@@ -1,8 +1,9 @@
 // utils/sync-github-actions.js
-// Lightweight GitHub Actions sync script — no npm dependencies, uses only Node.js built-ins.
 // Queries /api/latest-sync to find the last stored hour, then scrapes all missing hours
 // from that point to now via a Vietnam proxy, and POSTs results to Vercel.
+// Requires: npm install https-proxy-agent (installed by the GitHub Actions workflow step)
 const https = require('https');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 console.log("=== BỘ ĐỒNG BỘ CÀO DỮ LIỆU QUA PROXY VN (GITHUB ACTIONS TO VERCEL) ===");
 
@@ -148,100 +149,34 @@ async function getVietnamProxies() {
 }
 
 
-// Fetch EVN page through a Vietnam proxy.
-// Tries CONNECT tunnel (for HTTPS) first, falls back to plain HTTP forwarding.
-function fetchPageWithProxy(targetDate, proxy, timeoutMs = 4000) {
+// Fetch EVN page through a Vietnam proxy using https-proxy-agent (handles CONNECT tunnel reliably)
+function fetchPageWithProxy(targetDate, proxy, timeoutMs = 8000) {
   return new Promise((resolve) => {
-    const [proxyHost, proxyPort] = proxy.split(':');
     const pathQuery = `/PageHoChuaThuyDienEmbedEVN.aspx?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
-    const targetHost = 'hochuathuydien.evn.com.vn';
-    const net = require('net');
+    const agent = new HttpsProxyAgent(`http://${proxy}`);
 
-    const timer = setTimeout(() => { resolve(null); }, timeoutMs);
-    let done = false;
-    const finish = (result) => { if (!done) { done = true; clearTimeout(timer); resolve(result); } };
-
-    // ── Attempt 1: HTTP CONNECT tunnel → TLS ──────────────────────────────────
-    const socket = net.createConnection({ host: proxyHost, port: parseInt(proxyPort) }, () => {
-      socket.write(`CONNECT ${targetHost}:443 HTTP/1.1\r\nHost: ${targetHost}:443\r\n\r\n`);
+    const req = https.request({
+      hostname: 'hochuathuydien.evn.com.vn',
+      port: 443,
+      path: pathQuery,
+      method: 'GET',
+      agent,
+      timeout: timeoutMs,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept-Language': 'vi-VN,vi;q=0.9',
+      }
+    }, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) { req.destroy(); return resolve(null); }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => resolve(body.includes('<tbody>') ? body : null));
     });
 
-    let connectBuf = '';
-    let connectDone = false;
-
-    const onConnectData = (chunk) => {
-      if (connectDone) return;
-      connectBuf += chunk.toString('binary');
-
-      // Wait until we have the full response header (ends with \r\n\r\n)
-      if (!connectBuf.includes('\r\n\r\n')) return;
-      connectDone = true;
-
-      // CRITICAL: remove this listener BEFORE wrapping in TLS,
-      // otherwise it steals TLS handshake bytes and breaks the connection
-      socket.removeListener('data', onConnectData);
-
-      if (/HTTP\/\d[\d.]* 200/.test(connectBuf)) {
-        // CONNECT succeeded — wrap in TLS and send the HTTPS GET
-        const tls = require('tls');
-        const tlsSocket = tls.connect({ socket, servername: targetHost, rejectUnauthorized: false }, () => {
-          tlsSocket.write(
-            `GET ${pathQuery} HTTP/1.1\r\n` +
-            `Host: ${targetHost}\r\n` +
-            `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n` +
-            `Accept-Language: vi-VN,vi;q=0.9\r\n` +
-            `Connection: close\r\n\r\n`
-          );
-        });
-
-        let buf = Buffer.alloc(0);
-        tlsSocket.on('data', (d) => { buf = Buffer.concat([buf, d]); });
-        tlsSocket.on('end', () => {
-          const text = buf.toString('utf8');
-          const bodyStart = text.indexOf('\r\n\r\n');
-          const body = bodyStart >= 0 ? text.slice(bodyStart + 4) : text;
-          finish(body.includes('<tbody>') ? body : null);
-        });
-        tlsSocket.on('error', () => {
-          // CONNECT tunnel up but TLS failed — try HTTP fallback
-          tryHttpForward();
-        });
-      } else {
-        // CONNECT not supported — try plain HTTP forwarding
-        socket.destroy();
-        tryHttpForward();
-      }
-    };
-
-    socket.on('data', onConnectData);
-    socket.on('error', () => tryHttpForward());
-    socket.on('timeout', () => { socket.destroy(); finish(null); });
-
-    // ── Attempt 2: Plain HTTP proxy forwarding (absolute URL) ─────────────────
-    // Many free proxies don't support CONNECT but will happily forward HTTP requests.
-    function tryHttpForward() {
-      if (done) return;
-      const s2 = net.createConnection({ host: proxyHost, port: parseInt(proxyPort) }, () => {
-        s2.write(
-          `GET http://${targetHost}${pathQuery} HTTP/1.1\r\n` +
-          `Host: ${targetHost}\r\n` +
-          `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n` +
-          `Accept-Language: vi-VN,vi;q=0.9\r\n` +
-          `Proxy-Connection: close\r\n` +
-          `Connection: close\r\n\r\n`
-        );
-      });
-      let buf = Buffer.alloc(0);
-      s2.on('data', (d) => { buf = Buffer.concat([buf, d]); });
-      s2.on('end', () => {
-        const text = buf.toString('utf8');
-        const bodyStart = text.indexOf('\r\n\r\n');
-        const body = bodyStart >= 0 ? text.slice(bodyStart + 4) : text;
-        finish(body.includes('<tbody>') ? body : null);
-      });
-      s2.on('error', () => finish(null));
-      s2.on('timeout', () => { s2.destroy(); finish(null); });
-    }
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
   });
 }
 
