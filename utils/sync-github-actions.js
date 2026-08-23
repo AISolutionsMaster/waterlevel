@@ -121,21 +121,24 @@ function fetchProxyListUrl(url) {
   });
 }
 
-// Fetch VN proxies from multiple sources in parallel and deduplicate
-async function getVietnamProxies() {
-  console.log("📡 Đang lấy danh sách proxy Việt Nam từ nhiều nguồn...");
+// Fetch proxies from multiple large sources in parallel and deduplicate
+async function getProxies() {
+  console.log("📡 Đang lấy danh sách proxy từ nhiều nguồn...");
 
   const sources = [
-    // ProxyScrape — relax anonymity filter to get more results
+    // Large GitHub-hosted lists (updated frequently, thousands of proxies)
+    'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt',
+    'https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt',
+    // ProxyScrape global — no country filter, maximise pool size
+    'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=5000',
+    // VN-specific extras (small but targeted)
     'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=VN&ssl=all&anonymity=all',
-    // ProxyScrape v3 — separate endpoint, different pool
-    'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&country=VN',
-    // GeoNode — JSON API, large pool
     'https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc&country=VN&protocols=http',
   ];
 
   const results = await Promise.all(sources.map(fetchProxyListUrl));
-  // Flatten and deduplicate
+
+  // Flatten, deduplicate, then shuffle so each run tries proxies in random order
   const seen = new Set();
   const proxies = [];
   for (const list of results) {
@@ -143,10 +146,16 @@ async function getVietnamProxies() {
       if (!seen.has(p)) { seen.add(p); proxies.push(p); }
     }
   }
+  // Fisher-Yates shuffle for randomness across runs
+  for (let i = proxies.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [proxies[i], proxies[j]] = [proxies[j], proxies[i]];
+  }
 
-  console.log(`✅ Tổng cộng ${proxies.length} proxy Việt Nam (từ ${results.map((r, i) => `nguồn ${i+1}: ${r.length}`).join(', ')}).`);
+  console.log(`✅ Tổng cộng ${proxies.length} proxy (${results.map((r, i) => `nguồn ${i+1}: ${r.length}`).join(', ')}) — đã trộn ngẫu nhiên.`);
   return proxies;
 }
+
 
 // Fetch EVN page through a Vietnam proxy using https-proxy-agent.
 // Uses a hard outer timer to guarantee the function resolves within timeoutMs —
@@ -189,16 +198,16 @@ function fetchPageWithProxy(targetDate, proxy, timeoutMs = 8000) {
 }
 
 
-// Test proxies in parallel batches of 15 to find a working one fast
+// Test proxies in parallel batches — stop as soon as one works
 async function findWorkingProxyFast(proxies) {
-  console.log(`🔎 Kiểm tra ${proxies.length} proxy song song (nhóm 15, timeout 4s)...`);
-  const batchSize = 15;
+  const batchSize = 40; // larger batch = fewer rounds needed over a big pool
+  console.log(`🔎 Kiểm tra ${proxies.length} proxy song song (nhóm ${batchSize}, timeout 6s)...`);
   const targetDate = new Date();
   for (let i = 0; i < proxies.length; i += batchSize) {
     const batch = proxies.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (proxy) => {
-        const html = await fetchPageWithProxy(targetDate, proxy, 4000);
+        const html = await fetchPageWithProxy(targetDate, proxy, 6000);
         return html ? proxy : null;
       })
     );
@@ -207,6 +216,7 @@ async function findWorkingProxyFast(proxies) {
   }
   return null;
 }
+
 
 // Generic HTTPS GET → returns parsed JSON or null on error
 function httpsGetJson(url) {
@@ -294,7 +304,7 @@ async function main() {
   console.log(`🕒 Cần cào ${hoursToScrape.length} giờ: từ ${formatEvnDate(hoursToScrape[0])} → ${formatEvnDate(hoursToScrape[hoursToScrape.length - 1])}`);
 
   // 3. Get Vietnam proxies
-  const proxies = await getVietnamProxies();
+  const proxies = await getProxies();
   if (proxies.length === 0) {
     console.error('❌ Không lấy được danh sách proxy. Dừng.');
     process.exit(1);
