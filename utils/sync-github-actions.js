@@ -148,12 +148,22 @@ async function getVietnamProxies() {
   return proxies;
 }
 
-
-// Fetch EVN page through a Vietnam proxy using https-proxy-agent (handles CONNECT tunnel reliably)
+// Fetch EVN page through a Vietnam proxy using https-proxy-agent.
+// Uses a hard outer timer to guarantee the function resolves within timeoutMs —
+// the built-in 'timeout' option only covers socket inactivity AFTER connection,
+// NOT the CONNECT tunnel establishment phase (which can hang for minutes).
 function fetchPageWithProxy(targetDate, proxy, timeoutMs = 8000) {
   return new Promise((resolve) => {
     const pathQuery = `/PageHoChuaThuyDienEmbedEVN.aspx?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
     const agent = new HttpsProxyAgent(`http://${proxy}`);
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; clearTimeout(hardTimer); resolve(val); } };
+
+    // Hard deadline — fires regardless of CONNECT/TLS/data phase
+    const hardTimer = setTimeout(() => {
+      try { req.destroy(); } catch {}
+      finish(null);
+    }, timeoutMs);
 
     const req = https.request({
       hostname: 'hochuathuydien.evn.com.vn',
@@ -161,21 +171,19 @@ function fetchPageWithProxy(targetDate, proxy, timeoutMs = 8000) {
       path: pathQuery,
       method: 'GET',
       agent,
-      timeout: timeoutMs,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept-Language': 'vi-VN,vi;q=0.9',
       }
     }, (res) => {
-      if (res.statusCode < 200 || res.statusCode >= 300) { req.destroy(); return resolve(null); }
+      if (res.statusCode < 200 || res.statusCode >= 300) { req.destroy(); return finish(null); }
       let body = '';
       res.setEncoding('utf8');
       res.on('data', chunk => body += chunk);
-      res.on('end', () => resolve(body.includes('<tbody>') ? body : null));
+      res.on('end', () => finish(body.includes('<tbody>') ? body : null));
     });
 
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', () => finish(null));
     req.end();
   });
 }
@@ -300,25 +308,32 @@ async function main() {
   }
   console.log(`✨ Kết nối thành công qua proxy: ${workingProxy}`);
 
-  // 5. Scrape each missing hour sequentially
+  // 5. Scrape all missing hours in parallel (concurrency limit = 6)
+  // This is the key speedup: 29 hours / 6 = ~5 batches × ~10s = ~50s total
+  const SCRAPE_CONCURRENCY = 6;
   const allRecords = [];
-  for (const hour of hoursToScrape) {
-    console.log(`   -> Quét giờ: ${formatEvnDate(hour)}...`);
-    const html = await fetchPageWithProxy(hour, workingProxy);
+
+  async function scrapeHour(hour) {
+    const html = await fetchPageWithProxy(hour, workingProxy, 10000);
     if (!html) {
-      console.warn(`      ⚠️  Không tải được HTML — bỏ qua giờ này.`);
-      continue;
+      console.warn(`   ⚠️  ${formatEvnDate(hour)} — không tải được HTML.`);
+      return;
     }
     const parsed = parseEvnHtml(html, hour.getUTCFullYear(), hour.getUTCMonth() + 1, hour.toISOString());
     if (parsed && parsed.length > 0) {
       allRecords.push(...parsed);
-      console.log(`      └─ OK: ${parsed.length} dòng.`);
+      console.log(`   ✅ ${formatEvnDate(hour)} — ${parsed.length} dòng.`);
     } else {
-      console.warn(`      ⚠️  HTML hợp lệ nhưng không có dữ liệu.`);
+      console.warn(`   ⚠️  ${formatEvnDate(hour)} — HTML hợp lệ nhưng không có dữ liệu.`);
     }
-    // Small delay to avoid hammering the proxy
-    if (hoursToScrape.length > 1) await new Promise(r => setTimeout(r, 300));
   }
+
+  console.log(`🚀 Đang cào ${hoursToScrape.length} giờ song song (nhóm ${SCRAPE_CONCURRENCY})...`);
+  for (let i = 0; i < hoursToScrape.length; i += SCRAPE_CONCURRENCY) {
+    const batch = hoursToScrape.slice(i, i + SCRAPE_CONCURRENCY);
+    await Promise.all(batch.map(scrapeHour));
+  }
+
 
   if (allRecords.length === 0) {
     console.error('❌ Không thu thập được dữ liệu nào từ EVN. Dừng.');
