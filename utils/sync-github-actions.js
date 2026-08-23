@@ -86,25 +86,67 @@ function parseEvnHtml(html, queryYear, queryMonth, timestampIso) {
   return records;
 }
 
-// Fetch list of active Vietnam proxies — uses built-in https (no npm needed)
-function getVietnamProxies() {
+// Fetch VN proxies from a single URL (returns plain ip:port list)
+function fetchProxyListUrl(url) {
   return new Promise((resolve) => {
-    const url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=VN&ssl=all&anonymity=all';
-    console.log("📡 Đang lấy danh sách proxy Việt Nam...");
-    https.get(url, (res) => {
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      // Handle redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchProxyListUrl(res.headers.location).then(resolve);
+      }
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        const proxies = data.split('\r\n').map(p => p.trim()).filter(Boolean);
-        console.log(`✅ Tìm thấy ${proxies.length} proxy Việt Nam.`);
+        // Parse either plain ip:port lines or JSON from GeoNode
+        const proxies = [];
+        try {
+          const json = JSON.parse(data);
+          // GeoNode format: { data: [{ ip, port }, ...] }
+          if (Array.isArray(json.data)) {
+            for (const p of json.data) {
+              if (p.ip && p.port) proxies.push(`${p.ip}:${p.port}`);
+            }
+          }
+        } catch {
+          // Plain text format: one ip:port per line
+          data.split(/\r?\n/).forEach(line => {
+            const p = line.trim();
+            if (/^\d+\.\d+\.\d+\.\d+:\d+$/.test(p)) proxies.push(p);
+          });
+        }
         resolve(proxies);
       });
-    }).on('error', (err) => {
-      console.warn("⚠️ Không thể lấy danh sách proxy:", err.message);
-      resolve([]);
-    });
+    }).on('error', () => resolve([]));
   });
 }
+
+// Fetch VN proxies from multiple sources in parallel and deduplicate
+async function getVietnamProxies() {
+  console.log("📡 Đang lấy danh sách proxy Việt Nam từ nhiều nguồn...");
+
+  const sources = [
+    // ProxyScrape — relax anonymity filter to get more results
+    'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=VN&ssl=all&anonymity=all',
+    // ProxyScrape v3 — separate endpoint, different pool
+    'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=10000&country=VN',
+    // GeoNode — JSON API, large pool
+    'https://proxylist.geonode.com/api/proxy-list?limit=100&page=1&sort_by=lastChecked&sort_type=desc&country=VN&protocols=http',
+  ];
+
+  const results = await Promise.all(sources.map(fetchProxyListUrl));
+  // Flatten and deduplicate
+  const seen = new Set();
+  const proxies = [];
+  for (const list of results) {
+    for (const p of list) {
+      if (!seen.has(p)) { seen.add(p); proxies.push(p); }
+    }
+  }
+
+  console.log(`✅ Tổng cộng ${proxies.length} proxy Việt Nam (từ ${results.map((r, i) => `nguồn ${i+1}: ${r.length}`).join(', ')}).`);
+  return proxies;
+}
+
 
 // Fetch EVN page via HTTP CONNECT tunnel through a Vietnam proxy — no npm needed (net + tls built-ins)
 function fetchPageWithProxy(targetDate, proxy, timeoutMs = 4000) {
