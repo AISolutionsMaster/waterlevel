@@ -320,14 +320,23 @@ async function main() {
 
   // 5. Scrape missing hours sequentially through the working proxy
   // Sequential = 1 connection at a time — reliable for free proxies
-  // Worst case: 48h × 12s timeout = ~10 min (within GitHub Actions limit)
+  // Each hour gets up to 3 attempts to handle intermittent proxy drops
   const allRecords = [];
-  console.log(`🚀 Đang cào ${hoursToScrape.length} giờ tuần tự...`);
+  console.log(`🚀 Đang cào ${hoursToScrape.length} giờ tuần tự (tối đa 3 lần thử/giờ)...`);
 
   for (const hour of hoursToScrape) {
-    const html = await fetchPageWithProxy(hour, workingProxy, 12000);
+    let html = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      html = await fetchPageWithProxy(hour, workingProxy, 12000);
+      if (html) break;
+      if (attempt < 3) {
+        console.warn(`   ↩️  ${formatEvnDate(hour)} — thử lại (lần ${attempt}/3)...`);
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+
     if (!html) {
-      console.warn(`   ⚠️  ${formatEvnDate(hour)} — không tải được HTML.`);
+      console.warn(`   ⚠️  ${formatEvnDate(hour)} — không tải được HTML sau 3 lần thử.`);
       continue;
     }
     const parsed = parseEvnHtml(html, hour.getUTCFullYear(), hour.getUTCMonth() + 1, hour.toISOString());
@@ -338,6 +347,7 @@ async function main() {
       console.warn(`   ⚠️  ${formatEvnDate(hour)} — không có dữ liệu.`);
     }
   }
+
 
 
   if (allRecords.length === 0) {
