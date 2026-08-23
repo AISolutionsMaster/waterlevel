@@ -401,6 +401,7 @@ async function main() {
       process.exit(1);
     }
     console.log(`🎉 THÀNH CÔNG: Đã ghi ${result.body.insertedRows ?? allRecords.length} dòng lên Vercel Postgres!`);
+    process.exit(0); // Force exit — open proxy sockets would otherwise keep Node.js alive
   } catch (err) {
     console.error('❌ Lỗi mạng khi gửi dữ liệu:', err.message);
     process.exit(1);
