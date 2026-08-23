@@ -198,13 +198,12 @@ function fetchPageWithProxy(targetDate, proxy, timeoutMs = 8000) {
 }
 
 
-// Test proxies in parallel batches — collect up to `maxFound` working ones
-async function findWorkingProxies(proxies, maxFound = 5) {
+// Test proxies in parallel batches of 40 — stop as soon as one works
+async function findWorkingProxy(proxies) {
   const batchSize = 40;
-  console.log(`🔎 Kiểm tra ${proxies.length} proxy song song (nhóm ${batchSize}, timeout 6s), cần ${maxFound} proxy hoạt động...`);
+  console.log(`🔎 Kiểm tra ${proxies.length} proxy (nhóm ${batchSize}, timeout 6s)...`);
   const targetDate = new Date();
-  const working = [];
-  for (let i = 0; i < proxies.length && working.length < maxFound; i += batchSize) {
+  for (let i = 0; i < proxies.length; i += batchSize) {
     const batch = proxies.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (proxy) => {
@@ -212,17 +211,11 @@ async function findWorkingProxies(proxies, maxFound = 5) {
         return html ? proxy : null;
       })
     );
-    for (const found of results) {
-      if (found && !working.includes(found)) {
-        working.push(found);
-        if (working.length >= maxFound) break;
-      }
-    }
-    if (working.length > 0) console.log(`   → Tìm thấy ${working.length}/${maxFound} proxy hoạt động...`);
+    const found = results.find(Boolean);
+    if (found) return found; // stop immediately on first hit
   }
-  return working;
+  return null;
 }
-
 
 
 // Generic HTTPS GET → returns parsed JSON or null on error
@@ -317,42 +310,33 @@ async function main() {
     process.exit(1);
   }
 
-  // 4. Find up to 5 working proxies
-  const workingProxies = await findWorkingProxies(proxies, 5);
-  if (workingProxies.length === 0) {
+  // 4. Find one working proxy (stops on first hit)
+  const workingProxy = await findWorkingProxy(proxies);
+  if (!workingProxy) {
     console.error('❌ Không tìm thấy proxy nào hoạt động. Vui lòng chạy lại sau.');
     process.exit(1);
   }
-  console.log(`✨ Sử dụng ${workingProxies.length} proxy: ${workingProxies.join(', ')}`);
+  console.log(`✨ Proxy hoạt động: ${workingProxy}`);
 
-  // 5. Scrape missing hours — round-robin across working proxies, 2 concurrent per proxy
-  // Using 1-2 concurrent connections per proxy avoids overloading free proxies
-  const CONCURRENCY = Math.min(workingProxies.length * 2, hoursToScrape.length);
+  // 5. Scrape missing hours sequentially through the working proxy
+  // Sequential = 1 connection at a time — reliable for free proxies
+  // Worst case: 48h × 12s timeout = ~10 min (within GitHub Actions limit)
   const allRecords = [];
-  let proxyIndex = 0;
+  console.log(`🚀 Đang cào ${hoursToScrape.length} giờ tuần tự...`);
 
-  async function scrapeHour(hour) {
-    // Pick the next proxy in round-robin order
-    const proxy = workingProxies[proxyIndex % workingProxies.length];
-    proxyIndex++;
-    const html = await fetchPageWithProxy(hour, proxy, 12000);
+  for (const hour of hoursToScrape) {
+    const html = await fetchPageWithProxy(hour, workingProxy, 12000);
     if (!html) {
       console.warn(`   ⚠️  ${formatEvnDate(hour)} — không tải được HTML.`);
-      return;
+      continue;
     }
     const parsed = parseEvnHtml(html, hour.getUTCFullYear(), hour.getUTCMonth() + 1, hour.toISOString());
     if (parsed && parsed.length > 0) {
       allRecords.push(...parsed);
       console.log(`   ✅ ${formatEvnDate(hour)} — ${parsed.length} dòng.`);
     } else {
-      console.warn(`   ⚠️  ${formatEvnDate(hour)} — HTML hợp lệ nhưng không có dữ liệu.`);
+      console.warn(`   ⚠️  ${formatEvnDate(hour)} — không có dữ liệu.`);
     }
-  }
-
-  console.log(`🚀 Đang cào ${hoursToScrape.length} giờ (${CONCURRENCY} song song, round-robin qua ${workingProxies.length} proxy)...`);
-  for (let i = 0; i < hoursToScrape.length; i += CONCURRENCY) {
-    const batch = hoursToScrape.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map(scrapeHour));
   }
 
 
