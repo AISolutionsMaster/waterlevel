@@ -148,64 +148,103 @@ async function getVietnamProxies() {
 }
 
 
-// Fetch EVN page via HTTP CONNECT tunnel through a Vietnam proxy — no npm needed (net + tls built-ins)
+// Fetch EVN page through a Vietnam proxy.
+// Tries CONNECT tunnel (for HTTPS) first, falls back to plain HTTP forwarding.
 function fetchPageWithProxy(targetDate, proxy, timeoutMs = 4000) {
   return new Promise((resolve) => {
     const [proxyHost, proxyPort] = proxy.split(':');
     const pathQuery = `/PageHoChuaThuyDienEmbedEVN.aspx?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
-
-    // Open TCP connection to the proxy and send HTTP CONNECT to tunnel to EVN
+    const targetHost = 'hochuathuydien.evn.com.vn';
     const net = require('net');
+
+    const timer = setTimeout(() => { resolve(null); }, timeoutMs);
+    let done = false;
+    const finish = (result) => { if (!done) { done = true; clearTimeout(timer); resolve(result); } };
+
+    // ── Attempt 1: HTTP CONNECT tunnel → TLS ──────────────────────────────────
     const socket = net.createConnection({ host: proxyHost, port: parseInt(proxyPort) }, () => {
-      socket.write(`CONNECT hochuathuydien.evn.com.vn:443 HTTP/1.1\r\nHost: hochuathuydien.evn.com.vn:443\r\n\r\n`);
+      socket.write(`CONNECT ${targetHost}:443 HTTP/1.1\r\nHost: ${targetHost}:443\r\n\r\n`);
     });
 
-    let tunnelEstablished = false;
-    let buffer = '';
+    let connectBuf = '';
+    let connectDone = false;
 
-    const timer = setTimeout(() => { socket.destroy(); resolve(null); }, timeoutMs);
+    const onConnectData = (chunk) => {
+      if (connectDone) return;
+      connectBuf += chunk.toString('binary');
 
-    socket.on('data', (chunk) => {
-      if (!tunnelEstablished) {
-        buffer += chunk.toString();
-        if (buffer.includes('200')) {
-          // Tunnel open — upgrade to TLS and send the HTTPS request
-          tunnelEstablished = true;
-          const tlsSocket = require('tls').connect({
-            socket,
-            servername: 'hochuathuydien.evn.com.vn',
-            rejectUnauthorized: false
-          }, () => {
-            tlsSocket.write(
-              `GET ${pathQuery} HTTP/1.1\r\n` +
-              `Host: hochuathuydien.evn.com.vn\r\n` +
-              `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n` +
-              `Accept-Language: vi-VN,vi;q=0.9\r\n` +
-              `Connection: close\r\n\r\n`
-            );
-          });
+      // Wait until we have the full response header (ends with \r\n\r\n)
+      if (!connectBuf.includes('\r\n\r\n')) return;
+      connectDone = true;
 
-          let responseBuffer = Buffer.alloc(0);
-          tlsSocket.on('data', (d) => { responseBuffer = Buffer.concat([responseBuffer, d]); });
-          tlsSocket.on('end', () => {
-            clearTimeout(timer);
-            const text = responseBuffer.toString('utf8');
-            // Strip HTTP response headers, keep HTML body
-            const bodyStart = text.indexOf('\r\n\r\n');
-            const body = bodyStart >= 0 ? text.slice(bodyStart + 4) : text;
-            resolve(body.includes('<tbody>') ? body : null);
-          });
-          tlsSocket.on('error', () => { clearTimeout(timer); resolve(null); });
-        } else if (/^HTTP\/\d\.\d [45]/.test(buffer)) {
-          clearTimeout(timer); socket.destroy(); resolve(null);
-        }
+      // CRITICAL: remove this listener BEFORE wrapping in TLS,
+      // otherwise it steals TLS handshake bytes and breaks the connection
+      socket.removeListener('data', onConnectData);
+
+      if (/HTTP\/\d[\d.]* 200/.test(connectBuf)) {
+        // CONNECT succeeded — wrap in TLS and send the HTTPS GET
+        const tls = require('tls');
+        const tlsSocket = tls.connect({ socket, servername: targetHost, rejectUnauthorized: false }, () => {
+          tlsSocket.write(
+            `GET ${pathQuery} HTTP/1.1\r\n` +
+            `Host: ${targetHost}\r\n` +
+            `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n` +
+            `Accept-Language: vi-VN,vi;q=0.9\r\n` +
+            `Connection: close\r\n\r\n`
+          );
+        });
+
+        let buf = Buffer.alloc(0);
+        tlsSocket.on('data', (d) => { buf = Buffer.concat([buf, d]); });
+        tlsSocket.on('end', () => {
+          const text = buf.toString('utf8');
+          const bodyStart = text.indexOf('\r\n\r\n');
+          const body = bodyStart >= 0 ? text.slice(bodyStart + 4) : text;
+          finish(body.includes('<tbody>') ? body : null);
+        });
+        tlsSocket.on('error', () => {
+          // CONNECT tunnel up but TLS failed — try HTTP fallback
+          tryHttpForward();
+        });
+      } else {
+        // CONNECT not supported — try plain HTTP forwarding
+        socket.destroy();
+        tryHttpForward();
       }
-    });
+    };
 
-    socket.on('error', () => { clearTimeout(timer); resolve(null); });
-    socket.on('timeout', () => { clearTimeout(timer); socket.destroy(); resolve(null); });
+    socket.on('data', onConnectData);
+    socket.on('error', () => tryHttpForward());
+    socket.on('timeout', () => { socket.destroy(); finish(null); });
+
+    // ── Attempt 2: Plain HTTP proxy forwarding (absolute URL) ─────────────────
+    // Many free proxies don't support CONNECT but will happily forward HTTP requests.
+    function tryHttpForward() {
+      if (done) return;
+      const s2 = net.createConnection({ host: proxyHost, port: parseInt(proxyPort) }, () => {
+        s2.write(
+          `GET http://${targetHost}${pathQuery} HTTP/1.1\r\n` +
+          `Host: ${targetHost}\r\n` +
+          `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n` +
+          `Accept-Language: vi-VN,vi;q=0.9\r\n` +
+          `Proxy-Connection: close\r\n` +
+          `Connection: close\r\n\r\n`
+        );
+      });
+      let buf = Buffer.alloc(0);
+      s2.on('data', (d) => { buf = Buffer.concat([buf, d]); });
+      s2.on('end', () => {
+        const text = buf.toString('utf8');
+        const bodyStart = text.indexOf('\r\n\r\n');
+        const body = bodyStart >= 0 ? text.slice(bodyStart + 4) : text;
+        finish(body.includes('<tbody>') ? body : null);
+      });
+      s2.on('error', () => finish(null));
+      s2.on('timeout', () => { s2.destroy(); finish(null); });
+    }
   });
 }
+
 
 // Test proxies in parallel batches of 15 to find a working one fast
 async function findWorkingProxyFast(proxies) {
