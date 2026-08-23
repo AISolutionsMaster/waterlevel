@@ -1,12 +1,16 @@
 // utils/sync-github-actions.js
-const fs = require('fs');
-const path = require('path');
-const { HttpsProxyAgent } = require('https-proxy-agent');
+// Lightweight GitHub Actions sync script — no npm dependencies, uses only Node.js built-ins.
+// Queries /api/latest-sync to find the last stored hour, then scrapes all missing hours
+// from that point to now via a Vietnam proxy, and POSTs results to Vercel.
+const https = require('https');
 
 console.log("=== BỘ ĐỒNG BỘ CÀO DỮ LIỆU QUA PROXY VN (GITHUB ACTIONS TO VERCEL) ===");
 
 const VERCEL_DOMAIN = "https://mucnuochothuydien.vercel.app";
-const API_PATH = "/api/cron/scrape";
+const SCRAPE_PATH = "/api/cron/scrape";
+const LATEST_SYNC_PATH = "/api/latest-sync";
+// Safety cap: never scrape more than 48 hours back (prevents runaway on first deploy)
+const MAX_HOURS_BACKFILL = 48;
 
 function formatEvnDate(date) {
   const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
@@ -82,189 +86,244 @@ function parseEvnHtml(html, queryYear, queryMonth, timestampIso) {
   return records;
 }
 
-// Fetch list of active Vietnam proxies
-async function getVietnamProxies() {
-  const url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=VN&ssl=all&anonymity=all';
-  console.log("📡 Đang lấy danh sách proxy Việt Nam hoạt động từ ProxyScrape...");
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      console.warn("⚠️ Không thể lấy danh sách proxy, sử dụng kết nối trực tiếp.");
-      return [];
-    }
-    const text = await response.text();
-    const proxies = text.split('\r\n').map(p => p.trim()).filter(Boolean);
-    console.log(`✅ Đã tìm thấy ${proxies.length} proxy Việt Nam.`);
-    return proxies;
-  } catch (err) {
-    console.error("❌ Lỗi khi lấy danh sách proxy:", err.message);
-    return [];
-  }
-}
-
-// Fetch EVN page using a specific proxy agent via native https module
-function fetchPageWithProxy(targetDate, proxy, timeoutMs = 4000) {
+// Fetch list of active Vietnam proxies — uses built-in https (no npm needed)
+function getVietnamProxies() {
   return new Promise((resolve) => {
-    let pathQuery = '/PageHoChuaThuyDienEmbedEVN.aspx';
-    if (targetDate) {
-      pathQuery += `?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
-    }
-
-    const https = require('https');
-    try {
-      const agent = new HttpsProxyAgent(`http://${proxy}`);
-      
-      const options = {
-        hostname: 'hochuathuydien.evn.com.vn',
-        port: 443,
-        path: pathQuery,
-        method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-        },
-        agent: agent,
-        timeout: timeoutMs
-      };
-
-      const req = https.request(options, (res) => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          return resolve(null);
-        }
-        let body = '';
-        res.setEncoding('utf8');
-        res.on('data', (chunk) => { body += chunk; });
-        res.on('end', () => resolve(body));
+    const url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=VN&ssl=all&anonymity=all';
+    console.log("📡 Đang lấy danh sách proxy Việt Nam...");
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        const proxies = data.split('\r\n').map(p => p.trim()).filter(Boolean);
+        console.log(`✅ Tìm thấy ${proxies.length} proxy Việt Nam.`);
+        resolve(proxies);
       });
-
-      req.on('error', () => resolve(null));
-      req.on('timeout', () => {
-        req.destroy();
-        resolve(null);
-      });
-
-      req.end();
-    } catch (e) {
-      resolve(null);
-    }
+    }).on('error', (err) => {
+      console.warn("⚠️ Không thể lấy danh sách proxy:", err.message);
+      resolve([]);
+    });
   });
 }
 
-// Concurrently test proxies in batches of 10 to find a working one fast (< 4 seconds)
+// Fetch EVN page via HTTP CONNECT tunnel through a Vietnam proxy — no npm needed (net + tls built-ins)
+function fetchPageWithProxy(targetDate, proxy, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    const [proxyHost, proxyPort] = proxy.split(':');
+    const pathQuery = `/PageHoChuaThuyDienEmbedEVN.aspx?td=${encodeURIComponent(formatEvnDate(targetDate))}`;
+
+    // Open TCP connection to the proxy and send HTTP CONNECT to tunnel to EVN
+    const net = require('net');
+    const socket = net.createConnection({ host: proxyHost, port: parseInt(proxyPort) }, () => {
+      socket.write(`CONNECT hochuathuydien.evn.com.vn:443 HTTP/1.1\r\nHost: hochuathuydien.evn.com.vn:443\r\n\r\n`);
+    });
+
+    let tunnelEstablished = false;
+    let buffer = '';
+
+    const timer = setTimeout(() => { socket.destroy(); resolve(null); }, timeoutMs);
+
+    socket.on('data', (chunk) => {
+      if (!tunnelEstablished) {
+        buffer += chunk.toString();
+        if (buffer.includes('200')) {
+          // Tunnel open — upgrade to TLS and send the HTTPS request
+          tunnelEstablished = true;
+          const tlsSocket = require('tls').connect({
+            socket,
+            servername: 'hochuathuydien.evn.com.vn',
+            rejectUnauthorized: false
+          }, () => {
+            tlsSocket.write(
+              `GET ${pathQuery} HTTP/1.1\r\n` +
+              `Host: hochuathuydien.evn.com.vn\r\n` +
+              `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n` +
+              `Accept-Language: vi-VN,vi;q=0.9\r\n` +
+              `Connection: close\r\n\r\n`
+            );
+          });
+
+          let responseBuffer = Buffer.alloc(0);
+          tlsSocket.on('data', (d) => { responseBuffer = Buffer.concat([responseBuffer, d]); });
+          tlsSocket.on('end', () => {
+            clearTimeout(timer);
+            const text = responseBuffer.toString('utf8');
+            // Strip HTTP response headers, keep HTML body
+            const bodyStart = text.indexOf('\r\n\r\n');
+            const body = bodyStart >= 0 ? text.slice(bodyStart + 4) : text;
+            resolve(body.includes('<tbody>') ? body : null);
+          });
+          tlsSocket.on('error', () => { clearTimeout(timer); resolve(null); });
+        } else if (/^HTTP\/\d\.\d [45]/.test(buffer)) {
+          clearTimeout(timer); socket.destroy(); resolve(null);
+        }
+      }
+    });
+
+    socket.on('error', () => { clearTimeout(timer); resolve(null); });
+    socket.on('timeout', () => { clearTimeout(timer); socket.destroy(); resolve(null); });
+  });
+}
+
+// Test proxies in parallel batches of 15 to find a working one fast
 async function findWorkingProxyFast(proxies) {
-  console.log(`🔎 Đang kiểm tra ${proxies.length} proxy song song theo nhóm 10 (timeout 3.5s)...`);
-  const batchSize = 10;
+  console.log(`🔎 Kiểm tra ${proxies.length} proxy song song (nhóm 15, timeout 4s)...`);
+  const batchSize = 15;
+  const targetDate = new Date();
   for (let i = 0; i < proxies.length; i += batchSize) {
     const batch = proxies.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (proxy) => {
-        const html = await fetchPageWithProxy(new Date(), proxy, 3500);
-        if (html && html.includes("<tbody>")) {
-          return proxy;
-        }
-        return null;
+        const html = await fetchPageWithProxy(targetDate, proxy, 4000);
+        return html ? proxy : null;
       })
     );
     const found = results.find(Boolean);
-    if (found) {
-      return found;
-    }
+    if (found) return found;
   }
   return null;
 }
 
+// Generic HTTPS GET → returns parsed JSON or null on error
+function httpsGetJson(url) {
+  return new Promise((resolve) => {
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch { resolve(null); }
+      });
+    }).on('error', () => resolve(null));
+  });
+}
+
+// Query Vercel for the latest stored timestamp in the DB
+async function getLatestSyncedTimestamp(secretKey) {
+  const url = `${VERCEL_DOMAIN}${LATEST_SYNC_PATH}${secretKey ? `?key=${encodeURIComponent(secretKey)}` : ''}`;
+  console.log('🔍 Đang truy vấn timestamp mới nhất từ Vercel...');
+  const json = await httpsGetJson(url);
+  if (json && json.latestTimestamp) {
+    const ts = new Date(json.latestTimestamp);
+    console.log(`📅 Dữ liệu mới nhất trong DB: ${ts.toISOString()}`);
+    return ts;
+  }
+  console.warn('⚠️  Không lấy được timestamp — sẽ bắt đầu từ 48 giờ trước.');
+  return null;
+}
+
+// POST scraped records to Vercel using built-in https (no fetch/npm needed)
+function postToVercel(url, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const data = JSON.stringify(body);
+    const req = https.request({
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data)
+      }
+    }, (res) => {
+      let responseData = '';
+      res.on('data', chunk => responseData += chunk);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(responseData) }); }
+        catch { resolve({ status: res.statusCode, body: responseData }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
 async function main() {
   const secretKey = process.env.CRON_SECRET || "";
-  const proxies = await getVietnamProxies();
-  
-  const hoursToScrape = 6;
-  let allRecords = [];
-  
-  // 1. Find a working proxy concurrently
-  const workingProxy = await findWorkingProxyFast(proxies);
 
+  // 1. Query Vercel for the latest stored timestamp to find gaps
+  const latestStored = await getLatestSyncedTimestamp(secretKey);
+
+  // 2. Build list of missing hours: from (latestStored + 1h) up to current hour
+  const currentHour = new Date();
+  currentHour.setUTCMinutes(0, 0, 0);
+
+  const earliestAllowed = new Date(currentHour.getTime() - MAX_HOURS_BACKFILL * 60 * 60 * 1000);
+  const fromHour = latestStored
+    ? new Date(Math.max(latestStored.getTime() + 60 * 60 * 1000, earliestAllowed.getTime()))
+    : earliestAllowed;
+
+  // Floor fromHour to the hour boundary
+  fromHour.setUTCMinutes(0, 0, 0);
+
+  const hoursToScrape = [];
+  for (let t = new Date(fromHour); t <= currentHour; t = new Date(t.getTime() + 60 * 60 * 1000)) {
+    hoursToScrape.push(new Date(t));
+  }
+
+  if (hoursToScrape.length === 0) {
+    console.log('✅ Dữ liệu đã đầy đủ — không có giờ nào bị thiếu.');
+    process.exit(0);
+  }
+
+  console.log(`🕒 Cần cào ${hoursToScrape.length} giờ: từ ${formatEvnDate(hoursToScrape[0])} → ${formatEvnDate(hoursToScrape[hoursToScrape.length - 1])}`);
+
+  // 3. Get Vietnam proxies
+  const proxies = await getVietnamProxies();
+  if (proxies.length === 0) {
+    console.error('❌ Không lấy được danh sách proxy. Dừng.');
+    process.exit(1);
+  }
+
+  // 4. Find a working proxy
+  const workingProxy = await findWorkingProxyFast(proxies);
   if (!workingProxy) {
-    console.error("❌ Không tìm thấy proxy Việt Nam nào hoạt động vào lúc này. Vui lòng chạy lại sau.");
+    console.error('❌ Không tìm thấy proxy Việt Nam nào hoạt động. Vui lòng chạy lại sau.');
     process.exit(1);
   }
   console.log(`✨ Kết nối thành công qua proxy: ${workingProxy}`);
 
-  // 2. Fetch the last 6 hours of data using the working proxy
-  console.log(`🕒 Tiến hành cào dữ liệu ${hoursToScrape} giờ gần nhất qua proxy: ${workingProxy}...`);
-  for (let i = hoursToScrape - 1; i >= 0; i--) {
-    const targetDate = new Date(Date.now() - i * 60 * 60 * 1000);
-    
-    // Align parsedTimestamp to hourly bounds in UTC
-    const parsedTimestamp = new Date(targetDate);
-    parsedTimestamp.setUTCMinutes(0, 0, 0);
-    const timestampIso = parsedTimestamp.toISOString();
-
-    console.log(`   -> Quét giờ: ${formatEvnDate(parsedTimestamp)}...`);
-    const html = await fetchPageWithProxy(targetDate, workingProxy);
-    if (html) {
-      try {
-        const queryYear = parsedTimestamp.getFullYear();
-        const queryMonth = parsedTimestamp.getMonth() + 1;
-        const parsed = parseEvnHtml(html, queryYear, queryMonth, timestampIso);
-        if (parsed && parsed.length > 0) {
-          allRecords = allRecords.concat(parsed);
-          console.log(`      └─ OK: Đã đọc được ${parsed.length} dòng.`);
-        }
-      } catch (err) {
-        console.warn(`      ⚠️ Lỗi phân tích cú pháp HTML: ${err.message}`);
-      }
-    } else {
-      console.warn(`      ⚠️ Lỗi tải HTML cho thời điểm này.`);
+  // 5. Scrape each missing hour sequentially
+  const allRecords = [];
+  for (const hour of hoursToScrape) {
+    console.log(`   -> Quét giờ: ${formatEvnDate(hour)}...`);
+    const html = await fetchPageWithProxy(hour, workingProxy);
+    if (!html) {
+      console.warn(`      ⚠️  Không tải được HTML — bỏ qua giờ này.`);
+      continue;
     }
-    
-    await new Promise(r => setTimeout(r, 500));
+    const parsed = parseEvnHtml(html, hour.getUTCFullYear(), hour.getUTCMonth() + 1, hour.toISOString());
+    if (parsed && parsed.length > 0) {
+      allRecords.push(...parsed);
+      console.log(`      └─ OK: ${parsed.length} dòng.`);
+    } else {
+      console.warn(`      ⚠️  HTML hợp lệ nhưng không có dữ liệu.`);
+    }
+    // Small delay to avoid hammering the proxy
+    if (hoursToScrape.length > 1) await new Promise(r => setTimeout(r, 300));
   }
 
   if (allRecords.length === 0) {
-    console.error("❌ Không thu thập được dữ liệu nào từ EVN. Dừng.");
+    console.error('❌ Không thu thập được dữ liệu nào từ EVN. Dừng.');
     process.exit(1);
   }
 
-  // 3. Upload to Vercel
-  console.log(`\n📤 Đang gửi ${allRecords.length} dòng dữ liệu lên Production Vercel...`);
-  const targetUrl = `${VERCEL_DOMAIN}${API_PATH}${secretKey ? `?key=${encodeURIComponent(secretKey)}` : ""}`;
-  
-  const batchSize = 100;
-  let totalInserted = 0;
-  
-  for (let i = 0; i < allRecords.length; i += batchSize) {
-    const batch = allRecords.slice(i, i + batchSize);
-    const batchNum = Math.floor(i / batchSize) + 1;
-    const totalBatches = Math.ceil(allRecords.length / batchSize);
-    
-    console.log(`🚀 Đang tải lên lô ${batchNum}/${totalBatches} (${batch.length} dòng)...`);
-    
-    try {
-      const response = await fetch(targetUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(secretKey ? { 'Authorization': `Bearer ${secretKey}` } : {})
-        },
-        body: JSON.stringify({ records: batch })
-      });
-      
-      if (!response.ok) {
-        const text = await response.text();
-        console.error(`   ❌ Lỗi tải lên: HTTP ${response.status} - ${text}`);
-        process.exit(1);
-      }
-      
-      const resJson = await response.json();
-      totalInserted += (resJson.insertedRows || 0);
-      console.log(`   └─ Đã ghi thêm thành công: ${resJson.insertedRows || 0} dòng.`);
-    } catch (err) {
-      console.error(`   ❌ Lỗi mạng khi gửi dữ liệu lên Vercel: ${err.message}`);
+  // 6. POST all records to Vercel in one request
+  const targetUrl = `${VERCEL_DOMAIN}${SCRAPE_PATH}${secretKey ? `?key=${encodeURIComponent(secretKey)}` : ''}`;
+  console.log(`\n📤 Đang gửi ${allRecords.length} dòng lên Vercel...`);
+
+  try {
+    const result = await postToVercel(targetUrl, { records: allRecords });
+    if (result.status < 200 || result.status >= 300) {
+      console.error(`❌ Lỗi HTTP ${result.status}:`, result.body);
       process.exit(1);
     }
+    console.log(`🎉 THÀNH CÔNG: Đã ghi ${result.body.insertedRows ?? allRecords.length} dòng lên Vercel Postgres!`);
+  } catch (err) {
+    console.error('❌ Lỗi mạng khi gửi dữ liệu:', err.message);
+    process.exit(1);
   }
-
-  console.log(`\n🎉 THÀNH CÔNG: Đã đồng bộ tổng cộng ${totalInserted} dòng mới từ GitHub Actions lên Vercel Postgres!`);
 }
 
 main();

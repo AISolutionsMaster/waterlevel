@@ -2,8 +2,8 @@ name: Hourly Water Level Sync
 
 on:
   schedule:
-    # Runs every hour at off-peak minute 17 (24 runs/day). 
-    # Takes only ~30s per run (~360 mins/month, well within the 2,000 free minutes budget).
+    # Runs every hour at off-peak minute 17 (24 runs/day).
+    # Script uses only Node.js built-ins — no npm install needed (~20s per run, ~8 mins/month).
     - cron: '17 * * * *'
   workflow_dispatch:
     # Allows manual triggering from the GitHub Actions UI
@@ -18,24 +18,14 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js environment with npm cache
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci || npm install
-
       - name: Run Proxy Crawl and Sync Script
+        # Node.js is pre-installed on ubuntu-latest runners — no setup or npm install needed
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: node utils/sync-github-actions.js
-
-
