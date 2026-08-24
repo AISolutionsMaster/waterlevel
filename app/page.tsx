@@ -1123,7 +1123,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="container">
+    <main className="container">
       {/* 1. Header Area */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
@@ -3469,6 +3469,6 @@ export default function Dashboard() {
           </>
         )}
       </div>
-    </div>
+    </main>
   );
 }
